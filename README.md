@@ -12,9 +12,11 @@ It operates autonomously using an agentic approach, meaning the Director Agent b
 
 Here is an example of what Storyboard AI can generate:
 
-*(Note: To embed the video so it plays directly on GitHub, you can edit this `README.md` in the GitHub web interface and simply **drag and drop** the `storyboard_final_video.mp4` file here. GitHub will automatically upload it and create a video player.)*
 
-[Download or View the Demo Video Here](storyboard_final_video.mp4)
+
+
+https://github.com/user-attachments/assets/0ecebc9c-d983-4d8d-b832-54a3ba53ffb6
+
 
 ---
 
