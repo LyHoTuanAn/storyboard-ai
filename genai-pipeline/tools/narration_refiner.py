@@ -3,7 +3,7 @@ from .utils import client, _save_to_run_folder
 from google.genai import types
 import os
 
-def refine_narration_tool_fn(original_narration: str, image_path: str, video_duration: float = None, global_plan: dict = None) -> str:
+def refine_narration_tool_fn(original_narration: str, image_path: str, video_duration: float = None, global_plan: dict = None, language: str = "english") -> str:
     """
     Enhances the Director's narration script — preserving ALL information.
     
@@ -16,6 +16,7 @@ def refine_narration_tool_fn(original_narration: str, image_path: str, video_dur
         image_path: Path to the generated image (for visual context ONLY).
         video_duration: Duration of the animation in seconds (for pacing).
         global_plan: The Director's global plan (for tone/persona consistency).
+        language: The target language for the narration script (default: English).
     Returns:
         An enhanced narration string with ALL original information preserved.
     """
@@ -31,9 +32,23 @@ def refine_narration_tool_fn(original_narration: str, image_path: str, video_dur
     duration_guidance = ""
     if video_duration:
         target_words = int((video_duration / 60) * 140)
-        # Allow narration to be slightly longer than video (audio can extend the final frame)
-        max_words = int(target_words * 1.3)
-        duration_guidance = f"""
+        # Allow narration to be somewhat longer than video (audio can extend the final frame)
+        max_words = int(target_words * 1.5)
+        # Only bypass tightening if narration is significantly longer (2x the target) —
+        # this happens when the Director deliberately writes a rich, long scene narration
+        bypass_threshold = int(target_words * 2.0)
+        original_words = len(original_narration.split())
+        
+        if original_words > bypass_threshold:
+            duration_guidance = f"""
+    PACING CONSTRAINT:
+    - The animation is {video_duration:.1f} seconds long.
+    - The Director's narration is intentionally rich and detailed ({original_words} words).
+    - Do NOT shorten, compress, or tighten the narration. Preserve it in full.
+    - The video will hold on the last frame to accommodate the longer audio. That is expected and fine.
+    """
+        else:
+            duration_guidance = f"""
     PACING CONSTRAINT:
     - The animation is {video_duration:.1f} seconds long.
     - At natural speaking pace (~140 words/min), aim for approximately {target_words}-{max_words} words.
@@ -75,6 +90,7 @@ def refine_narration_tool_fn(original_narration: str, image_path: str, video_dur
     4. KEEP THE VOICE: Maintain the {persona} voice consistently.
     5. FLOW NATURALLY: The narration should sound natural when spoken aloud. Add brief 
        pacing cues like [pause] or [softly] ONLY where they genuinely improve delivery.
+    6. OUTPUT LANGUAGE: The refined narration MUST be written in {language}.
     
     WHAT YOU MAY DO:
     - Improve word choice for more vivid, engaging storytelling

@@ -185,8 +185,8 @@ def draw_animation_tool_fn(
     resize_wd: int = 1920,
     resize_ht: int = 1080,
     split_len: int = 10,
-    object_skip_rate: int = 10,
-    bg_object_skip_rate: int = 14,
+    object_skip_rate: int = 7,
+    bg_object_skip_rate: int = 12,
     end_duration_sec: int = 1
 ) -> str:
     """
@@ -336,13 +336,36 @@ def draw_animation_tool_fn(
         video_object.write(img)
 
     video_object.release()
+    time.sleep(0.1)  # Allow system/OpenCV to flush and release file lock
 
     # Move video to the final output directory if set
     if utils.GLOBAL_OUTPUT_DIR:
         final_path = os.path.join(utils.GLOBAL_OUTPUT_DIR, output_filename)
         if os.path.exists(temp_video_path):
-            if os.path.exists(final_path): os.remove(final_path)
-            os.rename(temp_video_path, final_path)
-            return final_path
+            if os.path.exists(final_path):
+                try:
+                    os.remove(final_path)
+                except Exception:
+                    pass
+            
+            # Retry renaming a few times
+            for attempt in range(5):
+                try:
+                    os.rename(temp_video_path, final_path)
+                    return final_path
+                except PermissionError:
+                    time.sleep(0.2)
+            
+            # Fallback to shutil copy + remove
+            import shutil
+            try:
+                shutil.copy2(temp_video_path, final_path)
+                try:
+                    os.remove(temp_video_path)
+                except Exception:
+                    pass
+                return final_path
+            except Exception as copy_err:
+                print(f"Error copying video on fallback: {copy_err}")
     
     return os.path.abspath(temp_video_path)

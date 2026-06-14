@@ -13,6 +13,7 @@ from .narration_refiner import refine_narration_tool_fn
 from .draw_animation import draw_animation_tool_fn
 from .utils import set_output_dir, get_video_duration
 from .reference_search import reference_search_tool_fn
+from .video_gen import generate_video_veo_tool_fn
 
 __all__ = [
     "research_tool_fn",
@@ -31,5 +32,6 @@ __all__ = [
     "draw_animation_tool_fn",
     "set_output_dir",
     "get_video_duration",
-    "reference_search_tool_fn"
+    "reference_search_tool_fn",
+    "generate_video_veo_tool_fn"
 ]

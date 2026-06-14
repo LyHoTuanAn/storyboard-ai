@@ -1,7 +1,22 @@
 import os
 import time
 import datetime
-import datetime
+import concurrent.futures
+import subprocess
+import sys
+
+# Reconfigure stdout/stderr to UTF-8 to support Unicode/Hindi character printing on Windows
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 from tools import (
     research_tool_fn,
     web_grounded_research_tool_fn,
@@ -18,7 +33,8 @@ from tools import (
     draw_animation_tool_fn,
     set_output_dir,
     get_video_duration,
-    reference_search_tool_fn
+    reference_search_tool_fn,
+    generate_video_veo_tool_fn
 )
 
 # --- Helper functions for robustness ---
@@ -47,17 +63,17 @@ def _retry(fn, *args, max_retries: int = 3, delay: float = 5.0, label: str = "",
         except Exception as e:
             last_error = e
             if attempt < max_retries:
-                print(f"  ⚠ {label} failed (attempt {attempt}/{max_retries}): {e}")
+                print(f"  [!] {label} failed (attempt {attempt}/{max_retries}): {e}")
                 print(f"  Retrying in {delay}s...")
                 time.sleep(delay)
             else:
-                print(f"  ✗ {label} failed after {max_retries} attempts: {e}")
+                print(f"  [X] {label} failed after {max_retries} attempts: {e}")
     return None
 
 # --- Main Pipeline ---
 
-def run_pipeline(user_context: str, do_research: bool = True, do_web_search: bool = False, use_internet_image_search: bool = True):
-    print(f"--- Starting Storyboard Pipeline for context: {user_context} ---")
+def run_pipeline(user_context: str, do_research: bool = True, do_web_search: bool = False, use_internet_image_search: bool = True, fast_mode: bool = False, language: str = "english", enable_veo: bool = False, veo_direction_by_director: bool = False):
+    print(f"--- Starting Storyboard Pipeline for context: {user_context} (Language: {language}) ---")
     
     # 0. Setup Output Directory
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -82,7 +98,7 @@ def run_pipeline(user_context: str, do_research: bool = True, do_web_search: boo
 
     # Step 2: Director Planning — The Director plans the entire video journey
     print("\nStep 2: Director Planning & Scene Writing...")
-    video_plan = director_tool_fn(user_context, research_material=research_report)
+    video_plan = director_tool_fn(user_context, research_material=research_report, language=language, enable_veo=enable_veo, veo_direction_by_director=veo_direction_by_director)
     global_plan = video_plan.get("global_plan", {})
     scenes = video_plan.get("scenes", [])
     print(f"Director planned {len(scenes)} scenes. Tone: {global_plan.get('tone')}, Arc: {global_plan.get('narrative_arc', 'N/A')}")
@@ -91,10 +107,7 @@ def run_pipeline(user_context: str, do_research: bool = True, do_web_search: boo
     prev_image_path = None
     failed_scenes = []
 
-    # 3. Asset Generation & Processing
-    print("\nStep 3: Processing Scenes...")
-    for i, scene in enumerate(scenes):
-        scene_num = i + 1
+    def process_scene_helper(scene_num, scene, local_prev_image_path):
         print(f"\n{'='*60}")
         print(f"--- Processing Scene {scene_num}/{len(scenes)} ---")
         
@@ -119,9 +132,9 @@ def run_pipeline(user_context: str, do_research: bool = True, do_web_search: boo
                 res = reference_search_tool_fn(search_query)
                 if _is_valid_path(res):
                     subject_image_path = res
-                    print(f"  ✓ Reference image downloaded to: {subject_image_path}")
+                    print(f"  [OK] Reference image downloaded to: {subject_image_path}")
                 else:
-                    print(f"  ⚠ Reference search failed or returned no valid image: {res}")
+                    print(f"  [!] Reference search failed or returned no valid image: {res}")
             elif not use_internet_image_search and search_query:
                 print(f"Scene {scene_num}: Internet image search disabled. Skipping reference for '{search_query}'.")
             
@@ -133,79 +146,117 @@ def run_pipeline(user_context: str, do_research: bool = True, do_web_search: boo
                 label=f"Scene {scene_num} image prompt", max_retries=2
             )
             if not img_prompt:
-                print(f"  ✗ SKIPPING Scene {scene_num}: Image prompt generation failed.")
-                failed_scenes.append(scene_num)
-                continue
+                print(f"  [X] SKIPPING Scene {scene_num}: Image prompt generation failed.")
+                return None
             
             # --- 3b. Generate Image (with retry) ---
             print(f"Scene {scene_num}: Generating image...")
             image_path = _retry(
                 image_gen_tool_fn, img_prompt,
-                reference_image_path=prev_image_path,
+                reference_image_path=local_prev_image_path,
                 subject_reference_image_path=subject_image_path,
                 label=f"Scene {scene_num} image gen", max_retries=3, delay=8.0
             )
             
             if not _is_valid_path(image_path):
-                print(f"  ✗ SKIPPING Scene {scene_num}: Image generation failed — no valid image produced.")
-                failed_scenes.append(scene_num)
-                continue
+                print(f"  [X] SKIPPING Scene {scene_num}: Image generation failed — no valid image produced.")
+                return None
                 
-            prev_image_path = image_path 
+            current_image_path = image_path 
+
+            # --- 3b.2. Veo Video Generation (if enabled) ---
+            veo_video_path = None
+            if enable_veo:
+                veo_prompt = scene.get('veo_prompt', '')
+                if not veo_prompt:
+                    veo_prompt = description
+                print(f"Scene {scene_num}: Generating Veo video with prompt: '{veo_prompt}'...")
+                veo_res = generate_video_veo_tool_fn(current_image_path, veo_prompt)
+                if _is_valid_path(veo_res):
+                    veo_video_path = veo_res
+                    print(f"  [OK] Veo video generated: {veo_video_path}")
+                else:
+                    print(f"  [!] Veo video generation failed: {veo_res}. Continuing without Veo.")
 
             # --- 3c. SAM Segmentation (non-critical, can fail gracefully) ---
             print(f"Scene {scene_num}: Segmenting image objects...")
             seg_json_path = None
             try:
-                seg_json_path = segmentation_tool_fn(image_path)
+                seg_json_path = segmentation_tool_fn(current_image_path)
                 if not _is_valid_path(seg_json_path):
-                    print(f"  ⚠ Segmentation returned no valid result. Continuing without segmentation.")
+                    print(f"  [!] Segmentation returned no valid result. Continuing without segmentation.")
                     seg_json_path = None
             except Exception as e:
-                print(f"  ⚠ Segmentation failed (non-critical): {e}. Continuing without segmentation.")
+                print(f"  [!] Segmentation failed (non-critical): {e}. Continuing without segmentation.")
             
             # --- 3d. Whiteboard Animation Generation ---
             print(f"Scene {scene_num}: Generating whiteboard animation...")
-            anim_video_path = draw_animation_tool_fn(image_path, segmentation_results_path=seg_json_path)
+            anim_video_path = draw_animation_tool_fn(current_image_path, segmentation_results_path=seg_json_path)
             
             if not _is_valid_path(anim_video_path):
-                print(f"  ✗ SKIPPING Scene {scene_num}: Animation generation failed.")
-                failed_scenes.append(scene_num)
-                continue
+                print(f"  [X] SKIPPING Scene {scene_num}: Animation generation failed.")
+                return None
+
+            # --- 3d.2. Concatenate Whiteboard Animation and Veo video (if enabled) ---
+            combined_video_path = anim_video_path
+            if veo_video_path:
+                print(f"Scene {scene_num}: Concatenating whiteboard animation and Veo video...")
+                combined_output = os.path.join(output_dir, f"scene_{scene_num}_combined_silent.mp4")
+                try:
+                    filter_complex = (
+                        "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25[v0]; "
+                        "[1:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25[v1]; "
+                        "[v0][v1]concat=n=2:v=1:a=0[v]"
+                    )
+                    concat_cmd = [
+                        "ffmpeg", "-y",
+                        "-i", anim_video_path,
+                        "-i", veo_video_path,
+                        "-filter_complex", filter_complex,
+                        "-map", "[v]",
+                        "-pix_fmt", "yuv420p",
+                        combined_output
+                    ]
+                    subprocess.run(concat_cmd, capture_output=True, check=True)
+                    if os.path.exists(combined_output):
+                        combined_video_path = combined_output
+                        print(f"  [OK] Successfully concatenated to {combined_video_path}")
+                    else:
+                        print("  [!] Concat output file not found. Falling back to whiteboard animation only.")
+                except Exception as concat_err:
+                    print(f"  [!] Concat failed: {concat_err}. Falling back to whiteboard animation only.")
             
             # --- 3e. Narration Refinement (non-critical, can fallback to original) ---
-            v_duration = get_video_duration(anim_video_path)
+            v_duration = get_video_duration(combined_video_path)
             print(f"Scene {scene_num}: Refining narration (Duration: {v_duration:.1f}s)...")
             try:
-                refined = refine_narration_tool_fn(narration, image_path, video_duration=v_duration, global_plan=global_plan)
+                refined = refine_narration_tool_fn(narration, current_image_path, video_duration=v_duration, global_plan=global_plan, language=language)
                 if refined and "Error" not in refined:
                     narration = refined
                 else:
-                    print(f"  ⚠ Narration refinement returned error. Using Director's original narration.")
+                    print(f"  [!] Narration refinement returned error. Using Director's original narration.")
             except Exception as e:
-                print(f"  ⚠ Narration refinement failed (non-critical): {e}. Using Director's original narration.")
+                print(f"  [!] Narration refinement failed (non-critical): {e}. Using Director's original narration.")
             
             # --- 3f. TTS Generation (with retry) ---
             print(f"Scene {scene_num}: Generating narration audio...")
             audio_path = _retry(
-                generate_tts_audio_tool_fn, narration,
+                generate_tts_audio_tool_fn, narration, language=language,
                 label=f"Scene {scene_num} TTS", max_retries=3, delay=5.0
             )
             
             if not _is_valid_path(audio_path):
-                print(f"  ✗ SKIPPING Scene {scene_num}: TTS generation failed — no audio produced.")
-                failed_scenes.append(scene_num)
-                continue
+                print(f"  [X] SKIPPING Scene {scene_num}: TTS generation failed — no audio produced.")
+                return None
             
             # --- 3g. Audio-Video Merging ---
             print(f"Scene {scene_num}: Merging audio and video...")
             merged_output = os.path.join(output_dir, f"scene_{scene_num}_merged.mp4")
-            merged_video_path = merge_audio_video_tool_fn(anim_video_path, audio_path, merged_output)
+            merged_video_path = merge_audio_video_tool_fn(combined_video_path, audio_path, merged_output)
             
             if not _is_valid_path(merged_video_path):
-                print(f"  ✗ SKIPPING Scene {scene_num}: Audio-Video merge failed.")
-                failed_scenes.append(scene_num)
-                continue
+                print(f"  [X] SKIPPING Scene {scene_num}: Audio-Video merge failed.")
+                return None
             
             # --- 3h. Audio Transcription (non-critical) ---
             print(f"Scene {scene_num}: Transcribing audio for subtitles...")
@@ -213,33 +264,91 @@ def run_pipeline(user_context: str, do_research: bool = True, do_web_search: boo
             try:
                 subtitles_json_path = transcribe_audio_tool_fn(merged_video_path)
             except Exception as e:
-                print(f"  ⚠ Transcription failed (non-critical): {e}. Skipping subtitles.")
+                print(f"  [!] Transcription failed (non-critical): {e}. Skipping subtitles.")
             
             # --- 3i. Subtitle Burning (non-critical) ---
+            final_scene_video = merged_video_path
             if _is_valid_path(subtitles_json_path):
                 print(f"Scene {scene_num}: Burning subtitles into video...")
                 subtitled_output = os.path.join(output_dir, f"scene_{scene_num}_final.mp4")
                 try:
-                    final_scene_video = burn_subtitles_to_video_tool_fn(merged_video_path, subtitles_json_path, subtitled_output)
+                    final_sv = burn_subtitles_to_video_tool_fn(merged_video_path, subtitles_json_path, subtitled_output)
                     
-                    if _is_valid_path(final_scene_video):
-                        final_videos.append(final_scene_video)
+                    if _is_valid_path(final_sv):
+                        final_scene_video = final_sv
                     else:
-                        print(f"  ⚠ Subtitle burning failed. Using merged video without subtitles.")
-                        final_videos.append(merged_video_path)
+                        print(f"  [!] Subtitle burning failed. Using merged video without subtitles.")
                 except Exception as e:
-                    print(f"  ⚠ Subtitle burning error: {e}. Using merged video without subtitles.")
-                    final_videos.append(merged_video_path)
+                    print(f"  [!] Subtitle burning error: {e}. Using merged video without subtitles.")
             else:
-                print(f"  ⚠ No subtitles available. Using merged video as-is.")
-                final_videos.append(merged_video_path)
+                print(f"  [!] No subtitles available. Using merged video as-is.")
             
-            print(f"  ✓ Scene {scene_num} completed successfully!")
+            # --- Cleanup intermediate files ---
+            files_to_delete = []
+            if seg_json_path and os.path.exists(seg_json_path):
+                files_to_delete.append(seg_json_path)
+            if anim_video_path and os.path.exists(anim_video_path):
+                files_to_delete.append(anim_video_path)
+            if veo_video_path and os.path.exists(veo_video_path):
+                files_to_delete.append(veo_video_path)
+            if combined_video_path and combined_video_path != anim_video_path and os.path.exists(combined_video_path):
+                files_to_delete.append(combined_video_path)
+            if audio_path and os.path.exists(audio_path):
+                files_to_delete.append(audio_path)
+            if merged_video_path and merged_video_path != final_scene_video and os.path.exists(merged_video_path):
+                files_to_delete.append(merged_video_path)
+            if subtitles_json_path and os.path.exists(subtitles_json_path):
+                files_to_delete.append(subtitles_json_path)
+                
+            for fpath in files_to_delete:
+                try:
+                    os.remove(fpath)
+                    print(f"  Cleaned up intermediate file: {os.path.basename(fpath)}")
+                except Exception as cleanup_err:
+                    print(f"  Warning: Could not delete intermediate file {os.path.basename(fpath)}: {cleanup_err}")
+
+            print(f"  [OK] Scene {scene_num} completed successfully!")
+            return {"scene_num": scene_num, "final_scene_video": final_scene_video, "image_path": current_image_path}
                 
         except Exception as e:
-            print(f"  ✗ UNEXPECTED ERROR in Scene {scene_num}: {e}")
-            failed_scenes.append(scene_num)
-            continue
+            print(f"  [X] UNEXPECTED ERROR in Scene {scene_num}: {e}")
+            return None
+
+    # 3. Asset Generation & Processing
+    if fast_mode:
+        print("\nStep 3: Processing Scenes in Parallel (Fast Mode)...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_scene = {
+                executor.submit(process_scene_helper, i + 1, scene, None): i + 1
+                for i, scene in enumerate(scenes)
+            }
+            results = []
+            for future in concurrent.futures.as_completed(future_to_scene):
+                scene_num = future_to_scene[future]
+                try:
+                    res = future.result()
+                    if res:
+                        results.append(res)
+                    else:
+                        failed_scenes.append(scene_num)
+                except Exception as e:
+                    print(f"  [X] UNEXPECTED ERROR in parallel Scene {scene_num}: {e}")
+                    failed_scenes.append(scene_num)
+            
+            # Reconstruct final videos in correct order
+            results.sort(key=lambda x: x["scene_num"])
+            for res in results:
+                final_videos.append(res["final_scene_video"])
+    else:
+        print("\nStep 3: Processing Scenes...")
+        for i, scene in enumerate(scenes):
+            scene_num = i + 1
+            res = process_scene_helper(scene_num, scene, prev_image_path)
+            if res:
+                prev_image_path = res["image_path"]
+                final_videos.append(res["final_scene_video"])
+            else:
+                failed_scenes.append(scene_num)
 
     # --- Summary ---
     print(f"\n{'='*60}")
@@ -279,7 +388,31 @@ if __name__ == "__main__":
         
     image_search_choice = input("Enable internet image search for references? [Y/n] (default Y): ").strip().lower()
     use_internet_image_search = False if image_search_choice in ['n', 'no'] else True
+    
+    fast_mode_choice = input("Enable fast mode (parallel generation)? [Y/n] (default N): ").strip().lower()
+    fast_mode = True if fast_mode_choice in ['y', 'yes'] else False
+    
+    language = input("Enter the narration language (default 'english'): ").strip()
+    if not language:
+        language = "english"
         
-    run_pipeline(context, do_research=do_research, do_web_search=do_web_search, use_internet_image_search=use_internet_image_search)
+    enable_veo_choice = input("Enable Veo video generation? [y/N] (default N): ").strip().lower()
+    enable_veo = True if enable_veo_choice in ['y', 'yes'] else False
+
+    veo_direction_by_director = False
+    if enable_veo:
+        veo_dir_choice = input("Let Director generate Veo visual prompts? [Y/n] (default Y): ").strip().lower()
+        veo_direction_by_director = False if veo_dir_choice in ['n', 'no'] else True
+
+    run_pipeline(
+        context, 
+        do_research=do_research, 
+        do_web_search=do_web_search, 
+        use_internet_image_search=use_internet_image_search, 
+        fast_mode=fast_mode, 
+        language=language, 
+        enable_veo=enable_veo, 
+        veo_direction_by_director=veo_direction_by_director
+    )
 
 

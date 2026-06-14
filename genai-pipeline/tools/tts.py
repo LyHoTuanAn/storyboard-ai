@@ -4,7 +4,7 @@ from google.genai import types
 from config import TTS_MODEL
 from . import utils
 
-def generate_tts_audio_tool_fn(text: str, speaker_one: str = None, speaker_two: str = None) -> str:
+def generate_tts_audio_tool_fn(text: str, speaker_one: str = None, speaker_two: str = None, language: str = "english") -> str:
     """
     Generates high-quality TTS audio from text using Gemini 2.5 Flash TTS.
     Supports up to 2 speakers for conversational text.
@@ -13,6 +13,7 @@ def generate_tts_audio_tool_fn(text: str, speaker_one: str = None, speaker_two: 
         text: The text to convert to speech. Use 'Speaker: text' format for multi-speaker.
         speaker_one: Optional name of the first speaker (e.g., 'Joe').
         speaker_two: Optional name of the second speaker (e.g., 'Jane').
+        language: The target language of the text to read (default: English).
     Returns:
         The path to the generated .wav file or an error message.
     """
@@ -58,9 +59,14 @@ def generate_tts_audio_tool_fn(text: str, speaker_one: str = None, speaker_two: 
                 )
             )
 
+        prompt_text = (
+            f"[narration style: stable, excited, expressive storytelling, speaking in {language}, consistent high volume, no whispering]\n"
+            f"{text}"
+        )
+
         response = utils.client.models.generate_content(
             model=TTS_MODEL,
-            contents=text,
+            contents=prompt_text,
             config=types.GenerateContentConfig(
                 response_modalities=["AUDIO"],
                 speech_config=speech_config,

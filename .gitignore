@@ -1,6 +1,5 @@
 # Temporary
-**/sam3
-**/output
+**/old
 
 **/*.mp4
 **/*.pkl
@@ -141,5 +140,9 @@ dmypy.json
 .pyre/
 
 # User requested ignores
-output/
-sam3/
+genai-pipeline/output/*
+!genai-pipeline/output/README.md
+old/
+*.wt
+.vscode/
+.agents/
