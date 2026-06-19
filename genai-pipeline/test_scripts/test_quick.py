@@ -6,14 +6,14 @@ from pipeline import run_pipeline
 
 
 if __name__ == "__main__":
-    prompt = "What is Adhik Maas and its relation with Shalivahan Shaka. Strictly generate exactly 4 scenes."
+    prompt = "What is El Nino and why is monsoon super late in India (strictly 5 scenes)"
     print(f"Testing pipeline with prompt: '{prompt}'")
     final_video = run_pipeline(
         prompt, 
         do_research=False, 
         do_web_search=True, 
         fast_mode=False, 
-        language="hindi",
+        language="english",
         enable_veo=True,
         veo_direction_by_director=True
     )

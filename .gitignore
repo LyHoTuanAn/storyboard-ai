@@ -142,6 +142,7 @@ dmypy.json
 # User requested ignores
 genai-pipeline/output/*
 !genai-pipeline/output/README.md
+genai-pipeline/test_scripts/output/*
 old/
 *.wt
 .vscode/
