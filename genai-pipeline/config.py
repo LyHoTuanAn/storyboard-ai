@@ -18,7 +18,9 @@ TTS_MODEL = "gemini-3.1-flash-tts-preview"
 # Veo Video Generation Model
 VEO_MODEL = "veo-3.1-generate-preview"
 # SAM Segmentation Model URL
-SAM_API_URL = "https://sam3-app-1040077537378.us-east4.run.app/predict"
+# To host SAM 3 on your own Cloud Run endpoint, follow instructions in sam3-hosting/README.md
+# SAM_API_URL = "https://sam3-app-1040077537378.us-east4.run.app/predict"
+SAM_API_URL = ""
 
 if not GEMINI_API_KEY:
     print("WARNING: GEMINI_API_KEY not found in environment variables.")

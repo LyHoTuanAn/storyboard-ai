@@ -17,6 +17,7 @@ if hasattr(sys.stderr, 'reconfigure'):
     except Exception:
         pass
 
+from config import SAM_API_URL
 from tools import (
     research_tool_fn,
     web_grounded_research_tool_fn,
@@ -179,15 +180,18 @@ def run_pipeline(user_context: str, do_research: bool = True, do_web_search: boo
                     print(f"  [!] Veo video generation failed: {veo_res}. Continuing without Veo.")
 
             # --- 3c. SAM Segmentation (non-critical, can fail gracefully) ---
-            print(f"Scene {scene_num}: Segmenting image objects...")
             seg_json_path = None
-            try:
-                seg_json_path = segmentation_tool_fn(current_image_path)
-                if not _is_valid_path(seg_json_path):
-                    print(f"  [!] Segmentation returned no valid result. Continuing without segmentation.")
-                    seg_json_path = None
-            except Exception as e:
-                print(f"  [!] Segmentation failed (non-critical): {e}. Continuing without segmentation.")
+            if not SAM_API_URL:
+                print(f"Scene {scene_num}: [INFO] SAM_API_URL is not configured (empty). Skipping SAM3 segmentation phase. Whiteboard animation will run in single-pass mode.")
+            else:
+                print(f"Scene {scene_num}: Segmenting image objects...")
+                try:
+                    seg_json_path = segmentation_tool_fn(current_image_path)
+                    if not _is_valid_path(seg_json_path):
+                        print(f"  [!] Segmentation returned no valid result. Continuing without segmentation.")
+                        seg_json_path = None
+                except Exception as e:
+                    print(f"  [!] Segmentation failed (non-critical): {e}. Continuing without segmentation.")
             
             # --- 3d. Whiteboard Animation Generation ---
             print(f"Scene {scene_num}: Generating whiteboard animation...")

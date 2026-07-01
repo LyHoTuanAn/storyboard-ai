@@ -1,5 +1,8 @@
 # Storyboard AI
 
+> [!NOTE]
+> **Latest Release**: SAM3 object segmentation is now completely optional, allowing you to run the entire pipeline directly with just your Gemini API key (running whiteboard animations in single-pass mode).
+
 An intelligent agentic pipeline that automates the creation of high-quality, fully narrated whiteboard animation videos from a simple text prompt.
 
 ## Overview
@@ -47,26 +50,27 @@ https://github.com/user-attachments/assets/433e86bc-7ad4-433b-8b09-117e1f3af9e9
 ## ⚙️ Setup & Configuration
 
 ### 1. Environment Configuration (`.env`)
-Create a `.env` file in the `genai-pipeline` folder (or copy `.env.example`) and configure the following variables:
+Create a `.env` file in the `genai-pipeline` folder (or copy `genai-pipeline/.env.example`) and configure the following variables:
 
 ```ini
 # Google API Key for LLM, TTS, Image Gen, and Veo Video Gen
 GOOGLE_API_KEY="your-google-api-key-here"
 
-# Hugging Face Access Token (Required to download SAM 3 model weights)
-HF_API_KEY="your-huggingface-token-here"
+# Hugging Face Access Token (Optional: Only required to download SAM 3 model weights if hosting SAM3 yourself)
+# HF_API_KEY="your-huggingface-token-here"
 
 # Set to TRUE if using Vertex AI, or FALSE to use Google Developer API (default)
 GOOGLE_GENAI_USE_VERTEXAI=FALSE
 ```
 
-### 2. SAM 3 Model Hosting (FastAPI & GCP Cloud Run)
-The whiteboard drawing sequence generator depends on instance segmentation. We host a self-contained FastAPI server that wraps the **Segment Anything Model 3 (SAM 3)**.
-- For complete setup instructions on obtaining weights, configuring the Docker container, and deploying to Google Cloud Run with GPU accelerators (NVIDIA L4), please refer to the detailed [SAM 3 Hosting Guide](./sam3-hosting/README.md).
+### 2. SAM 3 Model Hosting (FastAPI & GCP Cloud Run - Optional)
+The whiteboard drawing sequence generator can utilize instance segmentation for advanced multi-pass drawing. We host a self-contained FastAPI server that wraps the **Segment Anything Model 3 (SAM 3)**.
+- **Optional Setup**: If no `SAM_API_URL` is provided, the pipeline will skip the segmentation phase and run the whiteboard animation in single-pass mode. This allows new users to start running the pipeline directly using just their Gemini API key.
+- **Hosting Instructions**: For complete setup instructions on obtaining weights, configuring the Docker container, and deploying to Google Cloud Run with GPU accelerators (NVIDIA L4), please refer to the detailed [SAM 3 Hosting Guide](./sam3-hosting/README.md) in the `sam3-hosting/` folder.
 
 ### 3. Pipeline Configuration Settings (`config.py`)
 Core configuration parameters are set in [genai-pipeline/config.py](./genai-pipeline/config.py):
-- **`SAM_API_URL`**: Set this to your deployed SAM 3 Cloud Run endpoint (e.g., `https://sam3-service-xxxx-xx.a.run.app/predict`).
+- **`SAM_API_URL`**: Set this to your deployed SAM 3 Cloud Run endpoint (e.g., `https://sam3-service-xxxx-xx.a.run.app/predict`). If left as an empty string `""`, SAM3 segmentation is skipped, and whiteboard animations are drawn in single-pass mode.
 - **`MODEL_NAME`**: The model used for the Director Agent (default: `gemini-2.5-pro`).
 - **`IMAGE_GEN_MODEL`**: The image generation model used for drawing line art (default: `gemini-3-pro-image`).
 - **`VEO_MODEL`**: The video generation model (default: `veo-3.1-generate-preview`).
@@ -131,7 +135,10 @@ This release marks the official launch of **Storyboard AI v1.0.0**! With this la
 
 We are actively developing new features to expand compatibility and ease of deployment:
 - **Broad Model Support (Beyond Gemini)**: Expanding language model coverage starting with **Sarvam AI** support.
-- **Standalone Mode (No SAM 3 Server Needed - High Priority)**: 
-  - We are building an alternative operating mode that runs without requiring a dedicated SAM 3 endpoint on Google Cloud Run.
-  - While this standalone mode will slightly reduce the whiteboard animation drawing paths detail (due to simplified segmentation/edge detection logic), it will allow users to run the entire project out-of-the-box using **only a Gemini AI Studio API key**.
+
+---
+
+## ✅ Completed Features
+
+- **Standalone Mode (No SAM 3 Server Needed)**: Added support for running the pipeline out-of-the-box using only a Gemini API key. If no `SAM_API_URL` is provided, it skips the SAM3 model server requirement and automatically runs whiteboard drawing in single-pass mode.
 
