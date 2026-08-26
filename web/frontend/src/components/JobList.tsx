@@ -17,26 +17,31 @@ export function JobList({
 
   return (
     <ul className="flex flex-col" style={{ borderTop: "1px solid var(--border)" }}>
-      {jobs.map((job) => (
-        <li key={job.id} style={{ borderBottom: "1px solid var(--border)" }}>
-          <button
-            type="button"
-            onClick={() => onSelect(job.id)}
-            className="flex w-full flex-col gap-1 px-3 py-3 text-left transition-colors"
-            style={{
-              background: job.id === selected ? "var(--surface)" : "transparent",
-            }}
-          >
-            <span className="line-clamp-2 text-sm">{job.params?.context ?? job.id}</span>
-            <span className="flex items-center gap-3">
-              <StatusBadge status={job.status} />
-              <span className="mono text-xs" style={{ color: "var(--text-dim)" }}>
-                {job.id.slice(2)}
+      {jobs.map((job) => {
+        const isSelected = job.id === selected;
+        return (
+          <li key={job.id} style={{ borderBottom: "1px solid var(--border)" }}>
+            <button
+              type="button"
+              onClick={() => onSelect(job.id)}
+              aria-current={isSelected ? "true" : undefined}
+              className="flex w-full flex-col gap-1 py-3 pl-3 pr-3 text-left transition-colors"
+              style={{
+                background: isSelected ? "var(--surface)" : "transparent",
+                borderLeft: `2px solid ${isSelected ? "var(--accent)" : "transparent"}`,
+              }}
+            >
+              <span className="line-clamp-2 text-sm">{job.params?.context ?? job.id}</span>
+              <span className="flex items-center gap-3">
+                <StatusBadge status={job.status} />
+                <span className="mono text-xs" style={{ color: "var(--text-dim)" }}>
+                  {job.id.slice(2)}
+                </span>
               </span>
-            </span>
-          </button>
-        </li>
-      ))}
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }
