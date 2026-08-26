@@ -10,7 +10,12 @@ export function SceneCard({ jobId, scene }: { jobId: string; scene: SceneArtifac
         style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}
       >
         {scene.video ? (
-          <video src={fileUrl(jobId, scene.video)} controls className="h-full w-full object-cover" />
+          <video
+            src={fileUrl(jobId, scene.video)}
+            controls
+            aria-label={`Video scene ${scene.scene}`}
+            className="h-full w-full object-cover"
+          />
         ) : scene.image ? (
           <img
             src={fileUrl(jobId, scene.image)}
@@ -31,7 +36,14 @@ export function SceneCard({ jobId, scene }: { jobId: string; scene: SceneArtifac
         <span className="mono" style={{ color: "var(--text-dim)" }}>
           scene {scene.scene}
         </span>
-        {scene.audio && <audio src={fileUrl(jobId, scene.audio)} controls className="h-8" />}
+        {scene.audio && (
+          <audio
+            src={fileUrl(jobId, scene.audio)}
+            controls
+            aria-label={`Am thanh scene ${scene.scene}`}
+            className="h-8"
+          />
+        )}
       </figcaption>
     </figure>
   );
