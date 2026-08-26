@@ -5,6 +5,7 @@ import { useJobEvents } from "../hooks/useJobEvents";
 import type { Job } from "../types";
 import { LogView } from "./LogView";
 import { ProgressBar } from "./ProgressBar";
+import { SceneGrid } from "./SceneGrid";
 import { StatusBadge } from "./StatusBadge";
 
 // "corrupt" (job.json khong doc duoc - xem web/jobs.py:read_job) duoc coi
@@ -28,8 +29,16 @@ export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () =
   const [job, setJob] = useState<Job | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
   const confirmTimer = useRef<number | null>(null);
   const { lines, step, scene, warnings, status, stalled } = useJobEvents(jobId);
+
+  // Lam moi luoi scene moi khi co scene moi sinh xong hoac job doi trang
+  // thai (vd sang "done") - de anh/video/video hoan chinh moi xuat hien
+  // ma khong can nguoi dung tu tay reload trang.
+  useEffect(() => {
+    setRefreshKey((value) => value + 1);
+  }, [scene?.current, status]);
 
   const reload = useCallback(async () => {
     setJob(await getJob(jobId));
@@ -185,6 +194,11 @@ export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () =
           ))}
         </ul>
       )}
+
+      {/* Job "corrupt" khong co gi de tai: khong co artifacts API nao dang
+          tin cay (job.json khong doc duoc), nen luoi scene cung bi an
+          giong nhu LogView thay vi goi API roi hien mot luoi rong/loi. */}
+      {!corrupt && <SceneGrid jobId={jobId} refreshKey={refreshKey} />}
 
       {/* Khong co job.json doc duoc thi khong co gi that de theo doi -
           khong hien mot khung nhat ky rong, gay hieu lam la con dang co du
