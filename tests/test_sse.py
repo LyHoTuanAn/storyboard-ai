@@ -1,10 +1,12 @@
 import json
+import threading
 import time
 
 from fastapi.testclient import TestClient
 
 from web import jobs
 from web.events import format_sse
+from web.schemas import CreateJobRequest, JobParams
 from web.server import app
 
 client = TestClient(app)
@@ -124,6 +126,51 @@ def test_resume_mid_line_delivers_the_second_event_of_that_line(monkeypatch):
 
     assert second_event in resumed_events
     assert first_event not in resumed_events
+
+
+def test_events_stream_ends_promptly_for_a_corrupt_job():
+    """Regression guard: "corrupt" is not a member of jobs.TERMINAL (by
+    design - see web/jobs.py), so before this fix stream_job() fell through
+    to its polling loop for a corrupt job and only returned after
+    IDLE_TIMEOUT (600s), even though nothing will ever write another log
+    line for it. Bound this test's real wall-clock time instead of just
+    asserting on the eventual result: if stream_job() ever regresses back
+    to treating "corrupt" as a non-end status, this test must fail within a
+    few seconds, not hang the whole suite for ten minutes. Run the request
+    on a background thread and .join() it with a timeout well under
+    IDLE_TIMEOUT; a thread still alive after the timeout means the server
+    is still polling, so we fail immediately instead of waiting for it.
+    """
+    job = jobs.create_job(
+        CreateJobRequest(params=JobParams(context="Corrupt SSE")), key_source="server"
+    )
+    (jobs.job_dir(job["id"]) / "job.json").write_text("{not valid json", encoding="utf-8")
+
+    result: dict = {}
+
+    def fetch():
+        with client.stream("GET", f"/api/jobs/{job['id']}/events") as resp:
+            result["status_code"] = resp.status_code
+            result["body"] = "".join(resp.iter_text())
+
+    started = time.time()
+    thread = threading.Thread(target=fetch, daemon=True)
+    thread.start()
+    thread.join(timeout=5.0)
+    elapsed = time.time() - started
+
+    assert not thread.is_alive(), (
+        f"events stream for a corrupt job was still open after {elapsed:.1f}s - "
+        '"corrupt" must be treated as an end condition in stream_job(), not left '
+        "to fall through to the IDLE_TIMEOUT poll loop"
+    )
+
+    assert result["status_code"] == 200
+    events = parse_stream(result["body"])
+    assert events[-1][0] == "status"
+    assert events[-1][1]["status"] == "corrupt"
+    # Ended via the corrupt short-circuit, not via the idle-timeout path.
+    assert "stalled" not in events[-1][1]
 
 
 def test_log_events_are_redacted(monkeypatch):

@@ -7,6 +7,15 @@ from web.progress import parse_line, redact
 POLL_SECONDS = 0.25
 IDLE_TIMEOUT = 600.0
 
+# "corrupt" (job.json khong doc duoc - xem web/jobs.py:read_job) khong nam
+# trong jobs.TERMINAL - co y nhu vay, vi TERMINAL con dieu khien cac vong
+# chan cua set_status()/spawn() va khong nen bi noi rong o do. Nhung doi
+# voi vong lap stream ben duoi, mot job corrupt CUNG la diem ket thuc: se
+# khong bao gio co dong log moi nao duoc ghi cho no, nen cho toi IDLE_TIMEOUT
+# (600s) la lang phi thuan tuy. Dinh nghia mot tap hop rieng o day thay vi
+# viet chuoi "corrupt" lap lai trong dieu kien.
+END_STATUSES = jobs.TERMINAL | {"corrupt"}
+
 
 def format_sse(event: str, data: dict, offset: int, index: int = 0) -> str:
     """`id:` is `<offset>:<index>` - offset is the byte position of the
@@ -112,7 +121,7 @@ async def stream_job(job_id: str, start_offset: int = 0, skip_count: int = 0):
             cursor = line_end
             idle = 0.0
 
-        if job["status"] in jobs.TERMINAL:
+        if job["status"] in END_STATUSES:
             yield format_sse(
                 "status",
                 {
