@@ -71,6 +71,41 @@ def test_job_dir_rejects_id_with_trailing_newline():
         jobs.job_dir("j_20260101_000000_dead\n")
 
 
+def _corrupt(job_id):
+    (jobs.job_dir(job_id) / "job.json").write_text("{not valid json", encoding="utf-8")
+
+
+def test_read_job_returns_corrupt_shape_instead_of_raising():
+    """Regression: read_job() used to let json.JSONDecodeError escape
+    uncaught for an unreadable job.json, which is what turned GET
+    /api/jobs/{id} into a 500 while GET /api/jobs (via list_jobs, which
+    already caught this) returned 200. read_job() must now return the same
+    reduced shape list_jobs() has always produced for this case."""
+    job = jobs.create_job(make_request(), key_source="server")
+    _corrupt(job["id"])
+    assert jobs.read_job(job["id"]) == {"id": job["id"], "status": "corrupt"}
+
+
+def test_list_jobs_and_read_job_agree_on_a_corrupt_job():
+    job = jobs.create_job(make_request(), key_source="server")
+    _corrupt(job["id"])
+    from_list = next(j for j in jobs.list_jobs() if j["id"] == job["id"])
+    assert from_list == jobs.read_job(job["id"]) == {"id": job["id"], "status": "corrupt"}
+
+
+def test_set_status_refuses_a_corrupt_job():
+    """A corrupt job must not be silently transitioned - set_status() has no
+    started_at/models/etc to work with, and overwriting a broken record with
+    a clean-looking status would hide that anything went wrong."""
+    job = jobs.create_job(make_request(), key_source="server")
+    _corrupt(job["id"])
+    with pytest.raises(jobs.InvalidTransition):
+        jobs.set_status(job["id"], "running", pid=1)
+    # Still corrupt afterwards - the failed attempt must not have written
+    # anything.
+    assert jobs.read_job(job["id"])["status"] == "corrupt"
+
+
 def test_create_job_retries_on_collision(monkeypatch):
     # Create first job
     first = jobs.create_job(make_request("first"), key_source="server")

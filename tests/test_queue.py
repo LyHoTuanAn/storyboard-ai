@@ -50,6 +50,72 @@ def test_cancel_running_job_kills_the_process_group(monkeypatch):
     assert not jobs.pid_alive(pid)
 
 
+def test_cancel_corrupt_job_raises_instead_of_transitioning():
+    job = make_job()
+    (jobs.job_dir(job["id"]) / "job.json").write_text("{not valid json", encoding="utf-8")
+    with pytest.raises(jobs.InvalidTransition):
+        jobs.cancel(job["id"])
+    # Cancelling must not have "fixed" the record by writing a clean status
+    # over the broken one.
+    assert jobs.read_job(job["id"])["status"] == "corrupt"
+
+
+def test_reap_orphans_does_not_crash_when_set_status_races_on_one_job(monkeypatch):
+    """Defends the pump loop against a corrupt/raced job: if a running job's
+    set_status() call raises InvalidTransition (e.g. its job.json became
+    unreadable, or it was finalized elsewhere, between reap_orphans()'s
+    list_jobs() snapshot and this set_status() call), reap_orphans() must
+    skip that one job and keep reaping the rest rather than blowing up the
+    whole sweep."""
+    bad = make_job("bad")
+    jobs.set_status(bad["id"], "running", pid=999999)
+    good = make_job("good")
+    jobs.set_status(good["id"], "running", pid=999998)
+
+    original_set_status = jobs.set_status
+
+    def flaky_set_status(job_id, status, **fields):
+        if job_id == bad["id"]:
+            raise jobs.InvalidTransition("simulated race")
+        return original_set_status(job_id, status, **fields)
+
+    monkeypatch.setattr(jobs, "set_status", flaky_set_status)
+
+    reaped = jobs.reap_orphans()
+
+    assert bad["id"] not in reaped
+    assert good["id"] in reaped
+    assert jobs.read_job(good["id"])["status"] == "interrupted"
+
+
+def test_pump_does_not_crash_when_spawn_races_on_one_job(monkeypatch):
+    """Same defence as above, on the spawn side: if spawn() raises
+    InvalidTransition for one queued job (corrupt job.json, or cancelled out
+    from under pump() between the list_jobs() snapshot and the spawn()
+    call), pump() must skip it and still start the other queued jobs."""
+    monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
+    monkeypatch.setenv("SB_MAX_CONCURRENT", "5")
+    get_settings.cache_clear()
+
+    bad = make_job("bad")
+    good = make_job("good")
+
+    original_spawn = jobs.spawn
+
+    def flaky_spawn(job_id, api_key):
+        if job_id == bad["id"]:
+            raise jobs.InvalidTransition("simulated race")
+        return original_spawn(job_id, api_key)
+
+    monkeypatch.setattr(jobs, "spawn", flaky_spawn)
+
+    started = jobs.pump(lambda job: "AIzaSyFAKE")
+
+    assert bad["id"] not in started
+    assert good["id"] in started
+    wait_for_terminal(good["id"])
+
+
 def test_pump_starts_only_up_to_max_concurrent(monkeypatch):
     monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
     first = make_job("first")

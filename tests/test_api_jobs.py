@@ -3,6 +3,7 @@ import time
 from fastapi.testclient import TestClient
 
 from web import jobs, keys
+from web.schemas import CreateJobRequest, JobParams
 from web.server import app
 
 client = TestClient(app)
@@ -59,6 +60,54 @@ def test_cancel_then_cancel_again_returns_409(monkeypatch):
     time.sleep(0.5)
     assert client.post(f"/api/jobs/{job_id}/cancel").status_code == 200
     assert client.post(f"/api/jobs/{job_id}/cancel").status_code == 409
+
+
+def _make_local_job(context="Corrupt topic"):
+    """Create a job straight through jobs.create_job(), bypassing POST
+    /api/jobs, so nothing ever spawns a subprocess for it - keeps these
+    tests deterministic (a real runner process concurrently rewriting
+    job.json would race with the corruption below)."""
+    return jobs.create_job(CreateJobRequest(params=JobParams(context=context)), key_source="server")
+
+
+def _corrupt(job_id):
+    (jobs.job_dir(job_id) / "job.json").write_text("{not valid json", encoding="utf-8")
+
+
+def test_get_corrupt_job_returns_200_with_corrupt_shape():
+    """The reported bug: GET /api/jobs/{id} used to raise an uncaught
+    json.JSONDecodeError for a job whose job.json is unreadable, returning a
+    500. It must now return the same reduced shape GET /api/jobs already
+    produced for this case."""
+    job = _make_local_job()
+    _corrupt(job["id"])
+
+    resp = client.get(f"/api/jobs/{job['id']}")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"id": job["id"], "status": "corrupt"}
+
+
+def test_list_and_get_agree_for_a_corrupt_job():
+    """The actual user-facing failure mode: the job renders fine in the
+    list, the user clicks into it, and the detail call must not disagree
+    with the list call for the same job."""
+    job = _make_local_job()
+    _corrupt(job["id"])
+
+    from_list = next(item for item in client.get("/api/jobs").json() if item["id"] == job["id"])
+    from_get = client.get(f"/api/jobs/{job['id']}").json()
+
+    assert from_list == from_get == {"id": job["id"], "status": "corrupt"}
+
+
+def test_cancel_corrupt_job_returns_409_not_500():
+    job = _make_local_job()
+    _corrupt(job["id"])
+
+    resp = client.post(f"/api/jobs/{job['id']}/cancel")
+
+    assert resp.status_code == 409
 
 
 def test_get_unknown_job_returns_404():

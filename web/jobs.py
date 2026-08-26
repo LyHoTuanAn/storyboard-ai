@@ -57,7 +57,17 @@ def read_job(job_id: str) -> dict:
     target = job_dir(job_id) / "job.json"
     if not target.exists():
         raise JobNotFound(job_id)
-    return json.loads(target.read_text(encoding="utf-8"))
+    try:
+        return json.loads(target.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        # job.json ton tai nhung khong doc duoc (ghi do dang, dia hong, bi
+        # sua tay...). Tra ve dung "hinh dang rut gon" ma list_jobs() da
+        # dung cho truong hop nay, de GET /api/jobs va GET /api/jobs/{id}
+        # luon nhat quan - khong bao gio mot ben tra ve OK con ben kia nem
+        # loi 500 cho cung mot job. Moi noi goi read_job() phai tu coi
+        # status == "corrupt" la mot trang thai khong the chuyen doi (xem
+        # set_status/spawn ben duoi).
+        return {"id": job_id, "status": "corrupt"}
 
 
 def create_job(req: CreateJobRequest, key_source: str) -> dict:
@@ -110,6 +120,12 @@ def list_jobs(status: str | None = None) -> list[dict]:
 
 def set_status(job_id: str, status: str, **fields) -> dict:
     job = read_job(job_id)
+    if job["status"] == "corrupt":
+        # job.json khong doc duoc - khong co gi de doc truong ("started_at",
+        # "models"...) ma doan code ben duoi can, va viec ghi de mot trang
+        # thai "sach" len tren mot ban ghi da hong se che mat that su co
+        # chuyen gi xay ra. Tu choi chuyen doi thay vi lang le "hoi sinh" no.
+        raise InvalidTransition(f"{job_id} co job.json khong doc duoc, khong the chuyen trang thai")
     if job["status"] in TERMINAL:
         raise InvalidTransition(f"{job_id} da o trang thai {job['status']}")
     job["status"] = status
@@ -138,7 +154,11 @@ def build_env(job: dict, api_key: str) -> dict:
     env["PYTHONPATH"] = os.pathsep.join(
         [str(settings.repo_root), str(settings.repo_root / "genai-pipeline")]
     )
-    for name, value in job["models"].items():
+    # .get(..., {}) chu khong phai job["models"]: mot job "corrupt" (job.json
+    # khong doc duoc) khong co khoa nay. spawn() da chan job corrupt truoc
+    # khi goi ham nay, nhung giu ham nay tu ve phong khi co loi goi truc
+    # tiep khac trong tuong lai.
+    for name, value in job.get("models", {}).items():
         if value:
             env[f"SB_{name}"] = value
     return env
@@ -147,6 +167,11 @@ def build_env(job: dict, api_key: str) -> dict:
 def spawn(job_id: str, api_key: str) -> int:
     directory = job_dir(job_id)
     job = read_job(job_id)
+    if job["status"] == "corrupt":
+        # pump() chi spawn tu list_jobs(status="queued"), nen mot job corrupt
+        # (status "corrupt") se khong bao gio lot vao day qua duong di binh
+        # thuong - day la vong chan phong ve cho nguoi goi truc tiep khac.
+        raise InvalidTransition(f"{job_id} co job.json khong doc duoc, khong the spawn")
     log_path = directory / "log.txt"
     with log_path.open("ab") as log:
         process = subprocess.Popen(
@@ -212,28 +237,38 @@ def reap_orphans() -> list[str]:
     for job in list_jobs(status="running"):
         job_id = job["id"]
 
-        if job_id in exit_codes:
-            exit_code = exit_codes[job_id]
-            status = "failed" if exit_code else "interrupted"
-            set_status(
-                job_id,
-                status,
-                exit_code=exit_code,
-                error="Tien trinh chay job da chet ma khong bao ket qua.\n\n"
-                + log_tail(job_id),
-            )
-            reaped.append(job_id)
-            continue
+        # list_jobs(status="running") da loai job "corrupt" (status cua no
+        # khong phai "running"), nen nhanh nay chi xu ly duoc job ma
+        # set_status() con chap nhan. Nhung job.json van co the hong DUNG LUC
+        # giua thoi diem snapshot list_jobs() o tren va lenh set_status() ben
+        # duoi (vi du bi sua tay); khi do set_status se nem InvalidTransition.
+        # Bat no o day de mot job hong khong lam sap ca vong quet - bo qua
+        # job do va tiep tuc voi cac job con lai.
+        try:
+            if job_id in exit_codes:
+                exit_code = exit_codes[job_id]
+                status = "failed" if exit_code else "interrupted"
+                set_status(
+                    job_id,
+                    status,
+                    exit_code=exit_code,
+                    error="Tien trinh chay job da chet ma khong bao ket qua.\n\n"
+                    + log_tail(job_id),
+                )
+                reaped.append(job_id)
+                continue
 
-        pid = job.get("pid")
-        if pid is None or not pid_alive(pid):
-            set_status(
-                job_id,
-                "interrupted",
-                error="Tien trinh chay job da chet ma khong bao ket qua.\n\n"
-                + log_tail(job_id),
-            )
-            reaped.append(job_id)
+            pid = job.get("pid")
+            if pid is None or not pid_alive(pid):
+                set_status(
+                    job_id,
+                    "interrupted",
+                    error="Tien trinh chay job da chet ma khong bao ket qua.\n\n"
+                    + log_tail(job_id),
+                )
+                reaped.append(job_id)
+        except InvalidTransition:
+            continue
     return reaped
 
 
@@ -293,6 +328,13 @@ def pump(key_resolver) -> list[str]:
             api_key = key_resolver(job)
             if not api_key:
                 continue
-            spawn(job["id"], api_key)
+            try:
+                spawn(job["id"], api_key)
+            except InvalidTransition:
+                # job.json bi hong, hoac job da chuyen trang thai o noi khac
+                # (vi du bi huy) giua luc list_jobs() chup snapshot va luc
+                # spawn() o day - bo qua job do, dung de no lam sap ca vong
+                # pump.
+                continue
             started.append(job["id"])
         return started

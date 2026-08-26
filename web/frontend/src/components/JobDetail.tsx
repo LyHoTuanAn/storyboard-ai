@@ -7,7 +7,14 @@ import { LogView } from "./LogView";
 import { ProgressBar } from "./ProgressBar";
 import { StatusBadge } from "./StatusBadge";
 
-const TERMINAL = ["done", "failed", "cancelled", "interrupted"];
+// "corrupt" (job.json khong doc duoc - xem web/jobs.py:read_job) duoc coi
+// la mot trang thai khong con hoat dong o day, GIONG NHU cac trang thai
+// terminal thuc su: khong co gi de huy, khong co tien trinh de theo doi.
+// Luu y day la mot khai niem rieng cua frontend, khac voi TERMINAL ben
+// backend (web/jobs.py) - backend co mot nhanh rieng cho "corrupt" vi no
+// can tu choi CHUYEN TRANG THAI (set_status/spawn), con o day chi can biet
+// "co dang chay khong" de an/hien Cancel va ProgressBar.
+const TERMINAL = ["done", "failed", "cancelled", "interrupted", "corrupt"];
 
 // Huy job la hanh dong pha huy va khong the hoan tac: job dang chay co the
 // da tieu ton quota API that (goi model, sinh anh/video...). Vi vay nut Huy
@@ -77,13 +84,21 @@ export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () =
 
   if (!job) return null;
 
+  // Mot job "corrupt" chi co { id, status } - moi truong khac (params,
+  // error, exit_code, progress...) co the vang mat. running=false cho no
+  // (qua TERMINAL o tren) da tu dong an nut Huy va ProgressBar; cac truy
+  // cap truong con lai duoi day deu phai qua optional chaining/dieu kien
+  // rieng, khong duoc gia dinh job co day du du lieu.
+  const corrupt = job.status === "corrupt";
   const running = !TERMINAL.includes(job.status);
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h2 className="text-base font-semibold">{job.params.context}</h2>
+          {/* job.params co the vang mat (job "corrupt") - cung mau bao ve
+              bang optional chaining ma JobList.tsx da dung. */}
+          <h2 className="text-base font-semibold">{job.params?.context ?? job.id}</h2>
           <div className="flex items-center gap-3">
             <StatusBadge status={job.status} />
             <span className="mono text-xs" style={{ color: "var(--text-dim)" }}>
@@ -125,6 +140,24 @@ export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () =
 
       {running && <ProgressBar scene={scene} step={step} stalled={stalled} />}
 
+      {corrupt && (
+        <div
+          className="flex items-center gap-2 px-4 py-3 text-sm"
+          style={{
+            border: "1px solid var(--st-failed)",
+            borderRadius: "var(--radius)",
+            color: "var(--st-failed)",
+          }}
+          role="alert"
+        >
+          <WarningIcon size={16} />
+          <span>
+            Khong doc duoc du lieu cua job nay (file job.json bi hong). Khong
+            the xem chi tiet, nhat ky, hay huy job tu day.
+          </span>
+        </div>
+      )}
+
       {job.status === "failed" && job.error && (
         <div
           className="flex flex-col gap-2 px-4 py-3 text-sm"
@@ -153,7 +186,10 @@ export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () =
         </ul>
       )}
 
-      <LogView lines={lines} />
+      {/* Khong co job.json doc duoc thi khong co gi that de theo doi -
+          khong hien mot khung nhat ky rong, gay hieu lam la con dang co du
+          lieu song. */}
+      {!corrupt && <LogView lines={lines} />}
     </div>
   );
 }

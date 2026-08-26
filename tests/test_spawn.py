@@ -4,6 +4,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 from web import jobs
 from web.schemas import CreateJobRequest, JobModels, JobParams
 
@@ -35,6 +37,26 @@ def test_build_env_strips_decoy_secrets_but_keeps_gemini_key(monkeypatch):
     assert "SOME_TOKEN" not in env
     assert "MY_SECRET" not in env
     assert env["GEMINI_API_KEY"] == "AIzaSyFAKE"
+
+
+def test_build_env_tolerates_a_corrupt_job_dict():
+    """A corrupt job (as returned by jobs.read_job() for an unreadable
+    job.json) has no "models" key. build_env() must not KeyError on it -
+    spawn() already refuses to reach build_env() with such a job, but this
+    keeps build_env() itself safe for any other/future direct caller."""
+    env = jobs.build_env({"id": "j_x", "status": "corrupt"}, api_key="AIzaSyFAKE")
+    assert env["GEMINI_API_KEY"] == "AIzaSyFAKE"
+    assert "SB_MODEL_NAME" not in env
+    assert "SB_IMAGE_GEN_MODEL" not in env
+    assert "SB_TTS_MODEL" not in env
+
+
+def test_spawn_refuses_a_corrupt_job():
+    job = make_job()
+    (jobs.job_dir(job["id"]) / "job.json").write_text("{not valid json", encoding="utf-8")
+    with pytest.raises(jobs.InvalidTransition):
+        jobs.spawn(job["id"], api_key="AIzaSyFAKE")
+    assert job["id"] not in jobs._PROCESSES
 
 
 def test_spawn_runs_fake_pipeline_to_completion(monkeypatch):
