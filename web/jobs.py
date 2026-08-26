@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -233,3 +234,53 @@ def reap_orphans() -> list[str]:
             )
             reaped.append(job_id)
     return reaped
+
+
+def count_running() -> int:
+    return len(list_jobs(status="running"))
+
+
+def cancel(job_id: str) -> dict:
+    job = read_job(job_id)
+    if job["status"] in TERMINAL:
+        raise InvalidTransition(f"{job_id} da o trang thai {job['status']}")
+
+    pid = job.get("pid")
+    if job["status"] == "running" and pid:
+        process = _PROCESSES.get(job_id)
+
+        def _still_alive() -> bool:
+            if process is not None:
+                return process.poll() is None
+            return pid_alive(pid)
+
+        try:
+            group = os.getpgid(pid)
+            os.killpg(group, signal.SIGTERM)
+            for _ in range(50):
+                if not _still_alive():
+                    break
+                time.sleep(0.1)
+            if _still_alive():
+                os.killpg(group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        finally:
+            _PROCESSES.pop(job_id, None)
+
+    return set_status(job_id, "cancelled")
+
+
+def pump(key_resolver) -> list[str]:
+    settings = get_settings()
+    reap_orphans()  # tien trinh chet dot ngot van dang chiem cho, phai don truoc
+    started = []
+    for job in sorted(list_jobs(status="queued"), key=lambda item: item["id"]):
+        if count_running() >= settings.max_concurrent:
+            break
+        api_key = key_resolver(job)
+        if not api_key:
+            continue
+        spawn(job["id"], api_key)
+        started.append(job["id"])
+    return started

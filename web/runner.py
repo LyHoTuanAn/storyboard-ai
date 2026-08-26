@@ -17,6 +17,10 @@ RESEARCH_LABEL = {
 def run_fake(job: dict) -> str:
     """In ra chuoi log giong that, tao file gia. Khong goi API nao."""
     total = 2
+    sleep_for = float(os.getenv("SB_FAKE_SLEEP", "0"))
+    if sleep_for:
+        print("Step 0: fake mode dang ngu de test huy...")
+        time.sleep(sleep_for)
     skip = os.getenv("SB_FAKE_SKIP_SCENE")
     out_dir = Path.cwd() / "output" / f"run_fake_{int(time.time())}"
     out_dir.mkdir(parents=True, exist_ok=True)
