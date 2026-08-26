@@ -40,15 +40,28 @@ def safe_path(job_id: str, relative: str) -> Path:
     # candidate la vi tri THUC SU tren dia sau khi giai quyet moi symlink -
     # mot symlink nam trong job dir nhung tro ra ngoai se resolve thanh
     # duong dan ben ngoai, va bi containment check ben duoi tu choi.
-    candidate = (root / relative).resolve()
+    #
+    # `relative` la du lieu tu URL param, co the chua byte NUL (%00) hoac
+    # mot thanh phan qua dai - ca hai deu khien resolve()/exists() nem
+    # ValueError hoac OSError (vi du ENAMETOOLONG) thay vi tra ve gia tri.
+    # Bien gioi bao mat nay phai tu no bao boc nhung loi do va quy ve
+    # Forbidden, chu khong de chung lot ra ngoai thanh 500 - moi noi goi
+    # safe_path() (khong chi route hien tai) deu duoc bao dam cung mot hop
+    # dong: hoac tra ve Path hop le, hoac Forbidden, khong bao gio loi khac.
+    try:
+        candidate = (root / relative).resolve()
+        contained = _is_contained(root, candidate)
+        exists = candidate.exists() if contained else False
+    except (ValueError, OSError) as exc:
+        raise Forbidden(relative) from exc
 
-    if not _is_contained(root, candidate):
+    if not contained:
         raise Forbidden(relative)
     # candidate == root nghia la relative la "." hoac tuong duong - do la
     # chinh thu muc job, khong phai mot file cu the, nen cung bi tu choi.
     if candidate == root:
         raise Forbidden(relative)
-    if not candidate.exists():
+    if not exists:
         raise Forbidden(relative)
     return candidate
 

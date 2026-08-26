@@ -107,3 +107,36 @@ def test_safe_path_rejects_sibling_prefix_directory():
     # containment check would wrongly accept this.
     with pytest.raises(artifacts.Forbidden):
         artifacts.safe_path(created, f"../{job_root.name}_extra/secret.txt")
+
+
+def test_safe_path_rejects_embedded_nul_byte():
+    created = client.post("/api/jobs", json=BODY).json()["id"]
+    # A NUL byte makes the underlying resolve()/stat() calls raise
+    # ValueError - safe_path() must convert that into Forbidden rather
+    # than let it propagate as a 500.
+    with pytest.raises(artifacts.Forbidden):
+        artifacts.safe_path(created, "\x00real.txt")
+
+
+def test_safe_path_rejects_overlong_path_component():
+    created = client.post("/api/jobs", json=BODY).json()["id"]
+    overlong = "a" * 5000
+    # On most filesystems a single path component this long raises
+    # OSError (ENAMETOOLONG) from resolve()/stat(). safe_path() must
+    # convert that into Forbidden too. If the filesystem tolerates it
+    # without error, the containment/existence checks still refuse it
+    # since no such file exists inside the job dir - either way the
+    # observable result is Forbidden.
+    with pytest.raises(artifacts.Forbidden):
+        artifacts.safe_path(created, overlong)
+
+
+def test_file_route_blocks_embedded_nul_byte(monkeypatch):
+    job_id = finished_job(monkeypatch)
+    # Passing a raw NUL byte as the query param value makes the HTTP
+    # client percent-encode it to %00 in the request line; Starlette then
+    # decodes it back to an actual "\x00" for the `path` parameter - this
+    # exercises the real route (encode -> decode -> safe_path), not just
+    # a Python string constructed in-process.
+    resp = client.get(f"/api/jobs/{job_id}/file", params={"path": "log.txt\x00"})
+    assert resp.status_code == 403
