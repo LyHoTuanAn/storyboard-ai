@@ -4,9 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from web import jobs, keys
+from web import events, jobs, keys
 from web.schemas import CreateJobRequest
 
 
@@ -98,6 +98,23 @@ def cancel_job(job_id: str):
     keys.forget(job_id)
     _pump_and_sweep()
     return job
+
+
+@app.get("/api/jobs/{job_id}/events")
+def job_events(job_id: str, request: Request):
+    try:
+        jobs.read_job(job_id)
+    except jobs.JobNotFound:
+        return error(404, "not_found", f"Khong co job {job_id}")
+
+    raw_offset = request.headers.get("Last-Event-ID", "0")
+    start_offset = int(raw_offset) if raw_offset.isdigit() else 0
+
+    return StreamingResponse(
+        events.stream_job(job_id, start_offset),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.delete("/api/jobs/{job_id}", status_code=204)
