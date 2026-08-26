@@ -107,11 +107,10 @@ def job_events(job_id: str, request: Request):
     except jobs.JobNotFound:
         return error(404, "not_found", f"Khong co job {job_id}")
 
-    raw_offset = request.headers.get("Last-Event-ID", "0")
-    start_offset = int(raw_offset) if raw_offset.isdigit() else 0
+    start_offset, skip_count = events.parse_resume_id(request.headers.get("Last-Event-ID"))
 
     return StreamingResponse(
-        events.stream_job(job_id, start_offset),
+        events.stream_job(job_id, start_offset, skip_count),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

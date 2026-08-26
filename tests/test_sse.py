@@ -13,6 +13,9 @@ BODY = {"params": {"context": "SSE topic"}, "api_key": "AIzaSyFAKE"}
 
 
 def parse_stream(text):
+    """Return a list of (event_name, data, (offset, index)) tuples. The SSE
+    id is `<offset>:<index>` - parsed here into a tuple so callers can
+    compare/order ids without re-parsing strings."""
     events = []
     for block in text.split("\n\n"):
         if not block.strip():
@@ -22,23 +25,29 @@ def parse_stream(text):
             key, _, value = line.partition(": ")
             record[key] = value
         if "event" in record:
-            events.append((record["event"], json.loads(record["data"]), int(record["id"])))
+            offset_str, _, index_str = record["id"].partition(":")
+            event_id = (int(offset_str), int(index_str))
+            events.append((record["event"], json.loads(record["data"]), event_id))
     return events
 
 
+def wait_for_terminal(job_id):
+    for _ in range(100):
+        if jobs.read_job(job_id)["status"] in jobs.TERMINAL:
+            return
+        time.sleep(0.1)
+    raise AssertionError(f"{job_id} khong ket thuc")
+
+
 def test_format_sse_shape():
-    out = format_sse("step", {"n": 1}, 42)
-    assert out == 'id: 42\nevent: step\ndata: {"n": 1}\n\n'
+    out = format_sse("step", {"n": 1}, 42, 0)
+    assert out == 'id: 42:0\nevent: step\ndata: {"n": 1}\n\n'
 
 
 def test_stream_delivers_step_scene_and_status(monkeypatch):
     monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
     job_id = client.post("/api/jobs", json=BODY).json()["id"]
-
-    for _ in range(100):
-        if jobs.read_job(job_id)["status"] in jobs.TERMINAL:
-            break
-        time.sleep(0.1)
+    wait_for_terminal(job_id)
 
     with client.stream("GET", f"/api/jobs/{job_id}/events") as resp:
         assert resp.status_code == 200
@@ -58,23 +67,63 @@ def test_stream_delivers_step_scene_and_status(monkeypatch):
 def test_last_event_id_resumes_without_duplicates(monkeypatch):
     monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
     job_id = client.post("/api/jobs", json=BODY).json()["id"]
-    for _ in range(100):
-        if jobs.read_job(job_id)["status"] in jobs.TERMINAL:
-            break
-        time.sleep(0.1)
+    wait_for_terminal(job_id)
 
     with client.stream("GET", f"/api/jobs/{job_id}/events") as resp:
         full = "".join(resp.iter_text())
     events = parse_stream(full)
-    midpoint = events[len(events) // 2][2]
+    midpoint_offset, midpoint_index = events[len(events) // 2][2]
 
     with client.stream(
-        "GET", f"/api/jobs/{job_id}/events", headers={"Last-Event-ID": str(midpoint)}
+        "GET",
+        f"/api/jobs/{job_id}/events",
+        headers={"Last-Event-ID": f"{midpoint_offset}:{midpoint_index}"},
     ) as resp:
         resumed = "".join(resp.iter_text())
 
-    resumed_ids = [event_id for _, _, event_id in parse_stream(resumed) if event_id > 0]
-    assert all(event_id > midpoint for event_id in resumed_ids)
+    resumed_ids = [
+        event_id for _, _, event_id in parse_stream(resumed) if event_id != (0, 0)
+    ]
+    assert all(event_id > (midpoint_offset, midpoint_index) for event_id in resumed_ids)
+
+
+def test_resume_mid_line_delivers_the_second_event_of_that_line(monkeypatch):
+    """A line that parses into a progress event produces two SSE events - a
+    `log` event (sub-index 0) and the derived event (sub-index 1), both
+    sharing the same offset. If the client disconnects right after receiving
+    the first of the two and reconnects with that event's id, the second
+    event (same offset, next sub-index) must still arrive - not be skipped
+    just because it shares an id-offset with an event already received."""
+    monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
+    job_id = client.post("/api/jobs", json=BODY).json()["id"]
+    wait_for_terminal(job_id)
+
+    with client.stream("GET", f"/api/jobs/{job_id}/events") as resp:
+        full = "".join(resp.iter_text())
+    all_events = parse_stream(full)
+
+    pair = None
+    for i in range(len(all_events) - 1):
+        name, _, (offset, index) = all_events[i]
+        next_name, next_data, (next_offset, next_index) = all_events[i + 1]
+        if name == "log" and index == 0 and next_offset == offset and next_index == 1:
+            pair = (all_events[i], all_events[i + 1])
+            break
+    assert pair is not None, "expected a line producing a log + derived event pair"
+
+    first_event, second_event = pair
+    first_offset, first_index = first_event[2]
+
+    with client.stream(
+        "GET",
+        f"/api/jobs/{job_id}/events",
+        headers={"Last-Event-ID": f"{first_offset}:{first_index}"},
+    ) as resp:
+        resumed = "".join(resp.iter_text())
+    resumed_events = parse_stream(resumed)
+
+    assert second_event in resumed_events
+    assert first_event not in resumed_events
 
 
 def test_log_events_are_redacted(monkeypatch):
