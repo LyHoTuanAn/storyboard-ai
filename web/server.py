@@ -4,9 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
-from web import events, jobs, keys
+from web import artifacts, events, jobs, keys
 from web.schemas import CreateJobRequest
 
 
@@ -114,6 +114,26 @@ def job_events(job_id: str, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/api/jobs/{job_id}/artifacts")
+def job_artifacts(job_id: str):
+    try:
+        jobs.read_job(job_id)
+    except jobs.JobNotFound:
+        return error(404, "not_found", f"Khong co job {job_id}")
+    return artifacts.collect(job_id)
+
+
+@app.get("/api/jobs/{job_id}/file")
+def job_file(job_id: str, path: str):
+    try:
+        jobs.read_job(job_id)
+        return FileResponse(artifacts.safe_path(job_id, path))
+    except jobs.JobNotFound:
+        return error(404, "not_found", f"Khong co job {job_id}")
+    except artifacts.Forbidden:
+        return error(403, "forbidden", "Duong dan nam ngoai thu muc job")
 
 
 @app.delete("/api/jobs/{job_id}", status_code=204)
