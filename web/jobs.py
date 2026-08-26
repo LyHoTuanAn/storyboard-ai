@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -271,16 +272,27 @@ def cancel(job_id: str) -> dict:
     return set_status(job_id, "cancelled")
 
 
+# Serializes pump() so two concurrent callers (e.g. two FastAPI request
+# threads) cannot both observe count_running() < max_concurrent and both
+# spawn - the reap, the count, and the spawn loop all happen inside one
+# critical section. Scoped to pump() only; cancel()/set_status() are
+# unaffected.
+_PUMP_LOCK = threading.Lock()
+
+
 def pump(key_resolver) -> list[str]:
-    settings = get_settings()
-    reap_orphans()  # tien trinh chet dot ngot van dang chiem cho, phai don truoc
-    started = []
-    for job in sorted(list_jobs(status="queued"), key=lambda item: item["id"]):
-        if count_running() >= settings.max_concurrent:
-            break
-        api_key = key_resolver(job)
-        if not api_key:
-            continue
-        spawn(job["id"], api_key)
-        started.append(job["id"])
-    return started
+    with _PUMP_LOCK:
+        settings = get_settings()
+        reap_orphans()  # tien trinh chet dot ngot van dang chiem cho, phai don truoc
+        started = []
+        for job in sorted(
+            list_jobs(status="queued"), key=lambda item: item.get("created_at", "")
+        ):
+            if count_running() >= settings.max_concurrent:
+                break
+            api_key = key_resolver(job)
+            if not api_key:
+                continue
+            spawn(job["id"], api_key)
+            started.append(job["id"])
+        return started
