@@ -54,3 +54,55 @@ Bien phu tro khi thu:
 Ghi chu: `SB_MODEL_NAME`, `SB_IMAGE_GEN_MODEL`, `SB_TTS_MODEL` doc boi
 `genai-pipeline/config.py`, khong phai `web/settings.py`. `web/settings.py`
 chi doc `SB_MAX_CONCURRENT`, `SB_JOBS_DIR`, `SB_HOST`, `SB_PORT`.
+
+## Xu ly su co
+
+**Thay banner canh bao o dau trang.**
+Day la health check (`GET /api/health`), no phat hien mot trong hai van de:
+khong tim thay `ffmpeg` tren PATH, hoac `genai-pipeline/.env` khong co
+`GEMINI_API_KEY`. Thieu ffmpeg thi cac buoc truoc (nghien cuu, sinh anh, sinh
+audio) van chay binh thuong, job chi hong o buoc ghep video cuoi cung. Thieu
+key server thi van tao va chay job duoc binh thuong, chi can dan key rieng
+cua ban vao o "API key rieng (tuy chon)" tren form; key do chi dung cho job
+vua tao va khong luu lai.
+
+**Mot job dung mai o "Cho luot", khong bao gio chay.**
+So job dang o trang thai "Dang chay" da cham `SB_MAX_CONCURRENT` (mac dinh
+1). Xem danh sach "Lan chay" o giao dien de biet job nao dang chiem cho. Job
+dang cho se tu chay tiep ngay khi mot job dang chay ket thuc (xong, hong,
+hay bi huy) - khong can lam gi them. Muon nhieu job chay song song hon thi
+dat `SB_MAX_CONCURRENT` cao hon roi khoi dong lai server; bien nay chi duoc
+doc mot lan luc server khoi dong, doi gia tri trong luc server dang chay
+khong co tac dung.
+
+**Mot job hien "Bi ngat".**
+Tien trinh thuc su chay job da chet ma khong tu bao ket qua (vi du server bi
+restart giua chung, hoac tien trinh bi kill tu ben ngoai). Server phat hien
+va gan trang thai nay khi vong "quet don" cac job mo coi chay - dieu nay xay
+ra luc server khoi dong, va sau do lai cho moi lan co job moi duoc tao hoac
+bi huy.
+
+**Mot job hien "Loi file".**
+File `job.json` cua job do khong doc duoc (dia hong, bi sua tay, ghi do dang
+luc doc trung...). Ban ghi trang thai khong con doc duoc, nhung anh/audio/
+video da sinh ra truoc do van con nguyen tren dia, trong thu muc cua job
+(`SB_JOBS_DIR/<job_id>/`). Luu y: giao dien hien tai chua co nut xoa cho bat
+ky job nao (kha nang xoa moi chi ton tai o API `DELETE /api/jobs/{id}`, va
+API do cung tu choi xoa job dang o trang thai "Loi file" - chi xoa duoc job
+da o trang thai xong/hong/da huy/bi ngat). Muon don mot job loi file, hay
+xoa thu muc cua no bang tay.
+
+**Nhat ky ngung cap nhat giua chung mot job dai.**
+Ket noi SSE (luong su kien) tu dong dong sau khoang 10 phut khong co dong
+log moi nao - day khong phai loi. Giao dien hien mot dong thong bao nho
+("Chua co cap nhat moi mot luc. Ket noi van dang lang nghe va se tu cap
+nhat.") va trinh duyet tu ket noi lai, tiep tuc dung cho ma khong mat dong
+nao da nhan truoc do. Binh thuong gap khi mot buoc sinh video keo dai (vi du
+Veo).
+
+**Khong thay gi chay ca, nhat ky chi hien khi job da xong het.**
+Day la trieu chung cua viec Python dem (buffer) dau ra thay vi ghi ngay.
+Tien trinh chay job duoc mo voi co `-u` (tat buffer) chinh de tranh dieu
+nay; neu co nay bi bo di, dau ra se bi giu trong buffer va chi thuc su duoc
+ghi xuong file log khi tien trinh ket thuc, khien toan bo SSE im lang cho
+toi luc do.
