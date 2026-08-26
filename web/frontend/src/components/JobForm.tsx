@@ -121,6 +121,9 @@ export function JobForm({ onCreated }: { onCreated: (id: string) => void }) {
             onChange={(event) => setApiKey(event.target.value)}
             className="mono w-full px-3 py-2 text-sm"
             style={inputStyle}
+            autoComplete="new-password"
+            autoCorrect="off"
+            spellCheck={false}
           />
           <button
             type="button"
