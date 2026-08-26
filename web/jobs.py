@@ -190,15 +190,28 @@ def log_tail(job_id: str, lines: int = 50) -> str:
 
 def reap_orphans() -> list[str]:
     reaped = []
+
+    # Phase 0: sweep every tracked child regardless of the job's current
+    # status. A job that finished on its own (e.g. reached "done") stops
+    # appearing in list_jobs(status="running"), so phase 1 below would never
+    # visit it again - without this sweep its Popen would stay in
+    # _PROCESSES forever and its OS process would stay a zombie until this
+    # server exits. Reap here; remember the exit code for phase 1 to use for
+    # jobs that are still "running" (that is the crash-without-reporting
+    # case reap_orphans exists for).
+    exit_codes: dict[str, int] = {}
+    for job_id, process in list(_PROCESSES.items()):
+        exit_code = process.poll()
+        if exit_code is None:
+            continue
+        del _PROCESSES[job_id]
+        exit_codes[job_id] = exit_code
+
     for job in list_jobs(status="running"):
         job_id = job["id"]
 
-        process = _PROCESSES.get(job_id)
-        if process is not None:
-            exit_code = process.poll()
-            if exit_code is None:
-                continue
-            del _PROCESSES[job_id]
+        if job_id in exit_codes:
+            exit_code = exit_codes[job_id]
             status = "failed" if exit_code else "interrupted"
             set_status(
                 job_id,

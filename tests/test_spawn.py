@@ -52,6 +52,22 @@ def test_spawn_runs_fake_pipeline_to_completion(monkeypatch):
     assert jobs.read_job(job["id"])["status"] == "done"
 
 
+def _reap_until(predicate, attempts=50, delay=0.05):
+    """Retry jobs.reap_orphans() (the real production path, which reaps via
+    process.poll() internally) until predicate() is true or we give up.
+    Returns the last reaped list. Used instead of calling process.wait()/
+    process.poll() directly from a test, so these tests exercise the same
+    timing production code sees: the child may take a moment after exiting
+    before the OS makes it reapable."""
+    reaped = []
+    for _ in range(attempts):
+        reaped = jobs.reap_orphans()
+        if predicate():
+            break
+        time.sleep(delay)
+    return reaped
+
+
 def test_reap_orphans_detects_zombie_child_even_when_job_still_says_running(monkeypatch):
     """Before the fix, os.kill(pid, 0) on an un-reaped zombie always returns
     True, so pid_alive() (and thus the old reap_orphans) could never detect
@@ -61,18 +77,25 @@ def test_reap_orphans_detects_zombie_child_even_when_job_still_says_running(monk
     monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
     job = make_job()
     jobs.spawn(job["id"], api_key="AIzaSyFAKE")
-    process = jobs._PROCESSES[job["id"]]
-    process.wait()  # the OS-level child has now fully exited (a zombie until reaped)
+
+    for _ in range(100):
+        if jobs.read_job(job["id"])["status"] == "done":
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("fake pipeline never reached 'done'")
 
     # Simulate the "child died without reporting" case the finding is about:
     # force the job back to "running" as if the child never got to write its
-    # own terminal status before exiting.
+    # own terminal status before exiting. Note: we never call process.wait()
+    # or process.poll() ourselves anywhere in this test - only reap_orphans()
+    # (via _reap_until) touches the child, exactly like production.
     stuck = jobs.read_job(job["id"])
     stuck["status"] = "running"
     stuck["finished_at"] = None
     jobs.write_job(stuck)
 
-    reaped = jobs.reap_orphans()
+    reaped = _reap_until(lambda: job["id"] not in jobs._PROCESSES)
 
     assert job["id"] in reaped
     assert jobs.read_job(job["id"])["status"] in jobs.TERMINAL
@@ -91,14 +114,40 @@ def test_reap_orphans_detects_externally_sigkilled_child():
     jobs.set_status(job["id"], "running", pid=process.pid)
 
     os.kill(process.pid, signal.SIGKILL)
-    process.wait()
+    # No process.wait()/process.poll() here - reap_orphans() itself must be
+    # the one to observe and reap the exit, as it would in production.
 
-    reaped = jobs.reap_orphans()
+    reaped = _reap_until(lambda: job["id"] not in jobs._PROCESSES)
 
     assert job["id"] in reaped
     status = jobs.read_job(job["id"])["status"]
     assert status != "running"
     assert status in jobs.TERMINAL
+
+
+def test_reap_orphans_reaps_processes_of_jobs_that_finished_on_their_own(monkeypatch):
+    """Regression test: a job that reaches a terminal status by itself (the
+    child wrote "done" to job.json before exiting) stops appearing in
+    list_jobs(status="running"). If reap_orphans() only looked at that list,
+    it would never poll() such a child again - leaking its entry in
+    _PROCESSES and leaving its OS process a zombie for the server's
+    lifetime. reap_orphans() must sweep _PROCESSES independently of job
+    status to reap it, without touching the job's already-correct status."""
+    monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
+    job = make_job()
+    jobs.spawn(job["id"], api_key="AIzaSyFAKE")
+
+    for _ in range(100):
+        if jobs.read_job(job["id"])["status"] == "done":
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("fake pipeline never reached 'done'")
+
+    _reap_until(lambda: job["id"] not in jobs._PROCESSES)
+
+    assert job["id"] not in jobs._PROCESSES
+    assert jobs.read_job(job["id"])["status"] == "done"
 
 
 def test_reap_orphans_marks_dead_running_jobs_interrupted():
