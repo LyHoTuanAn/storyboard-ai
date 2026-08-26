@@ -3,6 +3,8 @@ import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 import { applyTheme, getStoredTheme, type ThemeMode } from "./theme";
 import { JobForm } from "./components/JobForm";
 import { JobList } from "./components/JobList";
+import { JobDetail } from "./components/JobDetail";
+import { EmptyState } from "./components/EmptyState";
 import { HealthBanner } from "./components/HealthBanner";
 import { useJobs } from "./hooks/useJobs";
 
@@ -47,11 +49,9 @@ export default function App() {
         </aside>
         <section>
           {selected ? (
-            <p className="mono text-sm">Da tao job {selected}</p>
+            <JobDetail jobId={selected} onChanged={refresh} />
           ) : (
-            <p className="mono text-sm" style={{ color: "var(--text-dim)" }}>
-              Chua chon job nao.
-            </p>
+            <EmptyState title="Chua chon job nao" body="Chon mot lan chay o cot ben trai, hoac tao job moi." />
           )}
         </section>
       </main>
