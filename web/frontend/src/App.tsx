@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 import { applyTheme, getStoredTheme, type ThemeMode } from "./theme";
+import { JobForm } from "./components/JobForm";
 
 export default function App() {
   const [mode, setMode] = useState<ThemeMode>(getStoredTheme);
+  const [selected, setSelected] = useState<string | null>(null);
   const nextLabel = mode === "dark" ? "Chuyen sang giao dien sang" : "Chuyen sang giao dien toi";
 
   useEffect(() => {
@@ -24,9 +26,21 @@ export default function App() {
           {mode === "dark" ? <SunIcon size={18} /> : <MoonIcon size={18} />}
         </button>
       </header>
-      <p className="mono mt-6" style={{ color: "var(--text-dim)" }}>
-        Khung giao dien da san sang.
-      </p>
+      <main className="mx-auto mt-6 grid max-w-[1400px] gap-8 md:grid-cols-[320px_1fr]">
+        <aside>
+          <h2 className="mb-4 text-sm font-semibold">Job moi</h2>
+          <JobForm onCreated={(id) => setSelected(id)} />
+        </aside>
+        <section>
+          {selected ? (
+            <p className="mono text-sm">Da tao job {selected}</p>
+          ) : (
+            <p className="mono text-sm" style={{ color: "var(--text-dim)" }}>
+              Chua chon job nao.
+            </p>
+          )}
+        </section>
+      </main>
     </div>
   );
 }
