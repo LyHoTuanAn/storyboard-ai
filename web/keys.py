@@ -30,6 +30,19 @@ def forget(job_id: str) -> None:
     _KEYS.pop(job_id, None)
 
 
+def sweep(active_job_ids) -> None:
+    """Drop every remembered key whose job id is not in `active_job_ids`.
+
+    Once a job is terminal, resolve() will never be called for it again, so
+    keeping its key around is pure exposure with no benefit. Only deletes
+    from `_KEYS` - never returns a key or `_KEYS` itself.
+    """
+    active = set(active_job_ids)
+    for job_id in list(_KEYS):
+        if job_id not in active:
+            _KEYS.pop(job_id, None)
+
+
 def resolve(job: dict) -> str | None:
     if job["key_source"] == "user":
         return _KEYS.get(job["id"])

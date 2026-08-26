@@ -1,7 +1,9 @@
 import shutil
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
 from web import jobs, keys
@@ -17,8 +19,31 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Storyboard AI", lifespan=lifespan)
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Same shape as FastAPI's default 422 handler, but with any submitted
+    `api_key` value scrubbed - the default handler echoes the raw `input`
+    verbatim, which would leak a key sent with the wrong type straight into
+    the response body."""
+    errors = jsonable_encoder(exc.errors())
+    for err in errors:
+        loc = err.get("loc", [])
+        if "input" in err and any(str(part) == "api_key" for part in loc):
+            err["input"] = "***"
+    return JSONResponse(status_code=422, content={"detail": errors})
+
+
 def error(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": {"code": code, "message": message}})
+
+
+def _active_job_ids() -> set[str]:
+    return {job["id"] for job in jobs.list_jobs() if job["status"] not in jobs.TERMINAL}
+
+
+def _pump_and_sweep() -> None:
+    jobs.pump(keys.resolve)
+    keys.sweep(_active_job_ids())
 
 
 def ffmpeg_available() -> bool:
@@ -45,7 +70,7 @@ def create_job(req: CreateJobRequest) -> dict:
     if key_source == "user":
         keys.remember(job["id"], req.api_key)
 
-    jobs.pump(keys.resolve)
+    _pump_and_sweep()
     return {"id": job["id"]}
 
 
@@ -71,7 +96,7 @@ def cancel_job(job_id: str):
     except jobs.InvalidTransition as exc:
         return error(409, "already_finished", str(exc))
     keys.forget(job_id)
-    jobs.pump(keys.resolve)
+    _pump_and_sweep()
     return job
 
 

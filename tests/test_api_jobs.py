@@ -2,7 +2,7 @@ import time
 
 from fastapi.testclient import TestClient
 
-from web import jobs
+from web import jobs, keys
 from web.server import app
 
 client = TestClient(app)
@@ -84,3 +84,27 @@ def test_delete_finished_job_removes_directory(monkeypatch):
     wait_for_terminal(job_id)
     assert client.delete(f"/api/jobs/{job_id}").status_code == 204
     assert not jobs.job_dir(job_id).exists()
+
+
+def test_sweep_forgets_key_once_job_is_terminal(monkeypatch):
+    monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
+    job_id = client.post("/api/jobs", json=BODY).json()["id"]
+    wait_for_terminal(job_id)
+    assert job_id in keys._KEYS
+
+    # Any route that runs _pump_and_sweep() should now forget the key for
+    # the job that just went terminal - creating a second job is enough to
+    # trigger that cycle.
+    client.post("/api/jobs", json=BODY)
+
+    assert job_id not in keys._KEYS
+
+
+def test_validation_error_scrubs_api_key_value():
+    secret = "AIzaSySECRETLOOKINGVALUE12345"
+    resp = client.post(
+        "/api/jobs",
+        json={"params": {"context": "Scrub test"}, "api_key": [secret]},
+    )
+    assert resp.status_code == 422
+    assert secret not in resp.text
