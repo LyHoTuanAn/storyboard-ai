@@ -157,3 +157,63 @@ def test_validation_error_scrubs_api_key_value():
     )
     assert resp.status_code == 422
     assert secret not in resp.text
+
+
+def test_delete_corrupt_job_removes_directory():
+    """"corrupt" khong nam trong jobs.TERMINAL (co y nhu vay - TERMINAL con
+    dieu khien set_status/spawn), nen truoc khi sua, route xoa tu choi mot
+    job loi file voi 409 va khong co cach nao don no bang API."""
+    job = _make_local_job()
+    _corrupt(job["id"])
+
+    assert client.delete(f"/api/jobs/{job['id']}").status_code == 204
+    assert not jobs.job_dir(job["id"]).exists()
+
+
+def test_delete_still_refuses_a_queued_job():
+    job = _make_local_job()
+    assert client.delete(f"/api/jobs/{job['id']}").status_code == 409
+    assert jobs.job_dir(job["id"]).exists()
+
+
+def test_pump_cannot_fail_a_job_created_in_the_same_request(monkeypatch):
+    """pump() bao hong mot job "queued" dung key rieng ma no khong phan giai
+    duoc key. Vong lap bom nen chay moi 3 giay, nen no co that su co the roi
+    vao khe giua create_job() (job.json da nam tren dia) va keys.remember()
+    (key chua kip vao bo nho) - va bao hong mot job vua duoc tao dung cach.
+    Route tao job phai giu ca hai buoc trong vung tranh chap cua pump()."""
+    import threading
+
+    monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
+
+    pump_done = threading.Event()
+    worker: dict = {}
+    original_create = jobs.create_job
+
+    def create_then_let_a_pump_tick_race(req, key_source):
+        job = original_create(req, key_source=key_source)
+
+        def run_pump():
+            from web import keys as keys_module
+
+            jobs.pump(keys_module.resolve)
+            pump_done.set()
+
+        thread = threading.Thread(target=run_pump)
+        thread.start()
+        worker["thread"] = thread
+        # Dung o day la dung khe nguy hiem: job da "queued" tren dia, key
+        # chua duoc nho. Luot bom kia phai bi chan ngoai vung tranh chap.
+        assert not pump_done.wait(0.5), (
+            "mot luot pump() da chay duoc vao giua create_job() va keys.remember()"
+        )
+        return job
+
+    monkeypatch.setattr(jobs, "create_job", create_then_let_a_pump_tick_race)
+
+    job_id = client.post("/api/jobs", json=BODY).json()["id"]
+
+    worker["thread"].join(timeout=10)
+    assert pump_done.is_set()
+    assert jobs.read_job(job_id)["status"] != "failed"
+    wait_for_terminal(job_id)

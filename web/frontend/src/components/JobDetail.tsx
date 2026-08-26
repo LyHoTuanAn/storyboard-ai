@@ -31,7 +31,13 @@ export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () =
   const [cancelling, setCancelling] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const confirmTimer = useRef<number | null>(null);
-  const { lines, step, scene, warnings, status, stalled } = useJobEvents(jobId);
+  // Chi mo luong su kien khi da biet job nay khong phai "corrupt". `job`
+  // co the con la ban ghi cua job TRUOC do (GET moi chua ve), nen phai so
+  // job.id voi jobId - khong duoc quyet dinh dua tren trang thai cua mot job
+  // khac. Job corrupt thi khung nhat ky cung bi an ben duoi: khong co gi de
+  // nghe, va server dong luong ngay lap tuc.
+  const streamable = job !== null && job.id === jobId && job.status !== "corrupt";
+  const { lines, step, scene, warnings, status, stalled } = useJobEvents(jobId, streamable);
 
   // Lam moi luoi scene moi khi co scene moi sinh xong hoac job doi trang
   // thai (vd sang "done") - de anh/video/video hoan chinh moi xuat hien

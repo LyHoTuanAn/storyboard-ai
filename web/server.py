@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from web import artifacts, events, jobs, keys
+from web.progress import redact
 from web.schemas import CreateJobRequest
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,15 @@ logger = logging.getLogger(__name__)
 # turn this into a busy loop that reaps/lists/locks (jobs.pump() takes
 # _PUMP_LOCK and touches the filesystem) far more often than useful.
 PUMP_INTERVAL_SECONDS = 3.0
+
+# Xoa duoc: cac trang thai ket thuc that su, CONG them "corrupt". Mot job
+# corrupt (job.json khong doc duoc) khong nam trong jobs.TERMINAL - co y nhu
+# vay, vi TERMINAL con dieu khien cac vong chan cua set_status()/spawn() va
+# khong duoc noi rong o do. Nhung tu goc nhin cua route xoa thi no chac chan
+# la khong con chay: khong co tien trinh nao, va khong bao gio co nua. Neu
+# khong liet ke o day thi mot job corrupt se khong bao gio xoa duoc bang API,
+# va cach duy nhat de don no la xoa thu muc bang tay.
+DELETABLE = jobs.TERMINAL | {"corrupt"}
 
 
 async def _pump_loop() -> None:
@@ -117,9 +127,16 @@ def create_job(req: CreateJobRequest) -> dict:
         return error(400, "missing_api_key", "Chua co API key. Nhap key hoac dat GEMINI_API_KEY trong .env")
 
     key_source = "user" if req.api_key else "server"
-    job = jobs.create_job(req, key_source=key_source)
-    if key_source == "user":
-        keys.remember(job["id"], req.api_key)
+    # Tao job va nho key phai la MOT buoc khong the chen vao giua: pump() bao
+    # hong mot job "queued" dung key rieng ma no khong phan giai duoc key, va
+    # vong lap bom nen chay moi 3 giay. Neu no lot vao dung khe giua
+    # create_job() (job.json da nam tren dia, trang thai "queued") va
+    # remember() (key chua kip vao bo nho), no se bao hong mot job vua duoc
+    # tao dung cach. Giu chung trong cung mot vung tranh chap voi pump().
+    with jobs.pump_lock():
+        job = jobs.create_job(req, key_source=key_source)
+        if key_source == "user":
+            keys.remember(job["id"], req.api_key)
 
     _pump_and_sweep()
     return {"id": job["id"]}
@@ -180,11 +197,23 @@ def job_artifacts(job_id: str):
 def job_file(job_id: str, path: str):
     try:
         jobs.read_job(job_id)
-        return FileResponse(artifacts.safe_path(job_id, path))
+        target = artifacts.safe_path(job_id, path)
     except jobs.JobNotFound:
         return error(404, "not_found", f"Khong co job {job_id}")
     except artifacts.Forbidden:
         return error(403, "forbidden", "Duong dan nam ngoai thu muc job")
+
+    # log.txt la mot duong ra rieng cua noi dung log, khong di qua SSE - nen
+    # no phai duoc loc key o day nua. Doc va loc trong bo nho thay vi
+    # FileResponse (gui thang file tho tu dia).
+    if target == jobs.job_dir(job_id).resolve() / "log.txt":
+        try:
+            content = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return error(404, "not_found", "Khong doc duoc file nhat ky")
+        return Response(content=redact(content), media_type="text/plain; charset=utf-8")
+
+    return FileResponse(target)
 
 
 @app.delete("/api/jobs/{job_id}", status_code=204)
@@ -193,7 +222,7 @@ def delete_job(job_id: str):
         job = jobs.read_job(job_id)
     except jobs.JobNotFound:
         return error(404, "not_found", f"Khong co job {job_id}")
-    if job["status"] not in jobs.TERMINAL:
+    if job["status"] not in DELETABLE:
         return error(409, "still_running", "Huy job truoc khi xoa")
     shutil.rmtree(jobs.job_dir(job_id), ignore_errors=True)
     keys.forget(job_id)

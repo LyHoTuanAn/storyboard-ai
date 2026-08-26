@@ -4,7 +4,7 @@ import time
 
 from fastapi.testclient import TestClient
 
-from web import jobs
+from web import events, jobs
 from web.events import format_sse
 from web.schemas import CreateJobRequest, JobParams
 from web.server import app
@@ -17,7 +17,9 @@ BODY = {"params": {"context": "SSE topic"}, "api_key": "AIzaSyFAKE"}
 def parse_stream(text):
     """Return a list of (event_name, data, (offset, index)) tuples. The SSE
     id is `<offset>:<index>` - parsed here into a tuple so callers can
-    compare/order ids without re-parsing strings."""
+    compare/order ids without re-parsing strings. A frame may legitimately
+    carry NO id line at all (a `status` frame emitted before this connection
+    has sent any log-derived event); such a frame gets an id of None."""
     events = []
     for block in text.split("\n\n"):
         if not block.strip():
@@ -27,8 +29,10 @@ def parse_stream(text):
             key, _, value = line.partition(": ")
             record[key] = value
         if "event" in record:
-            offset_str, _, index_str = record["id"].partition(":")
-            event_id = (int(offset_str), int(index_str))
+            event_id = None
+            if "id" in record:
+                offset_str, _, index_str = record["id"].partition(":")
+                event_id = (int(offset_str), int(index_str))
             events.append((record["event"], json.loads(record["data"]), event_id))
     return events
 
@@ -84,7 +88,9 @@ def test_last_event_id_resumes_without_duplicates(monkeypatch):
         resumed = "".join(resp.iter_text())
 
     resumed_ids = [
-        event_id for _, _, event_id in parse_stream(resumed) if event_id != (0, 0)
+        event_id
+        for _, _, event_id in parse_stream(resumed)
+        if event_id is not None and event_id != (0, 0)
     ]
     assert all(event_id > (midpoint_offset, midpoint_index) for event_id in resumed_ids)
 
@@ -185,3 +191,59 @@ def test_log_events_are_redacted(monkeypatch):
 
     assert "AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7" not in body
     assert "***" in body
+
+
+def test_stalled_event_does_not_carry_an_unsent_line_id(monkeypatch):
+    """Truoc khi sua, su kien "stalled" mang id `<cursor>:0`, ma cursor tro
+    toi dong KE TIEP - dong chua he duoc gui. Trinh duyet luu id do lam
+    Last-Event-ID, va khi no tu ket noi lai, logic resume bo qua "su kien so
+    0 cua dong tai offset do" - tuc dung cai `log` event cua dong tiep theo.
+    Moi lan im lang la mat dung mot dong nhat ky, trong khi spec (muc 7) hua
+    khong mat va khong lap. Su kien "stalled" phai mang id cua su kien CUOI
+    CUNG that su da gui."""
+    monkeypatch.setattr(events, "IDLE_TIMEOUT", 0.4)
+    monkeypatch.setattr(events, "POLL_SECONDS", 0.05)
+
+    job = jobs.create_job(
+        CreateJobRequest(params=JobParams(context="Stall topic")), key_source="server"
+    )
+    log_path = jobs.job_dir(job["id"]) / "log.txt"
+    first_line = "Step 1: Performing Web-Grounded Research (Fast)...\n"
+    log_path.write_text(first_line, encoding="utf-8")
+    jobs.set_status(job["id"], "running", pid=999999)
+
+    with client.stream("GET", f"/api/jobs/{job['id']}/events") as resp:
+        body = "".join(resp.iter_text())
+    first_pass = parse_stream(body)
+
+    stalled_name, stalled_data, stalled_id = first_pass[-1]
+    assert stalled_name == "status"
+    assert stalled_data.get("stalled") is True
+
+    delivered = [event_id for _, _, event_id in first_pass[:-1]]
+    assert delivered, "vong dau phai gui duoc it nhat mot su kien log"
+    assert stalled_id == delivered[-1], (
+        "su kien stalled mang id cua mot dong chua he duoc gui - lan ket noi "
+        "lai se bo qua dung dong do"
+    )
+
+    # Dong thu hai xuat hien sau khi luong da dong, dung nhu khi job im lang
+    # mot luc roi in tiep.
+    with log_path.open("a", encoding="utf-8") as stream:
+        stream.write("--- Processing Scene 1/2 ---\n")
+    jobs.set_status(job["id"], "done")
+
+    with client.stream(
+        "GET",
+        f"/api/jobs/{job['id']}/events",
+        headers={"Last-Event-ID": f"{stalled_id[0]}:{stalled_id[1]}"},
+    ) as resp:
+        resumed_body = "".join(resp.iter_text())
+    resumed = parse_stream(resumed_body)
+
+    log_lines = [data["line"] for name, data, _ in resumed if name == "log"]
+    assert "--- Processing Scene 1/2 ---" in log_lines, (
+        "dong log ke tiep bi mat khi ket noi lai tu su kien stalled"
+    )
+    # Va khong gui lai dong da nhan o vong truoc.
+    assert first_line.rstrip("\n") not in log_lines

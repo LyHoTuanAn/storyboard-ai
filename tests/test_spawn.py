@@ -184,3 +184,100 @@ def test_reap_orphans_leaves_queued_jobs_alone():
     job = make_job()
     jobs.reap_orphans()
     assert jobs.read_job(job["id"])["status"] == "queued"
+
+
+def test_spawn_gives_the_child_no_stdin():
+    """Pipeline duoc boc lai von la chuong trinh tuong tac. Neu con sot mot
+    loi goi input(), viec ke thua stdin cua server lam job treo vinh vien -
+    giu cho chay, khong in ra gi, khong ai biet tai sao. stdin phai la
+    DEVNULL de tinh huong do thanh EOF (job hong ngay) thay vi treo."""
+    job = make_job()
+    captured = {}
+    original_popen = subprocess.Popen
+
+    def recording_popen(*args, **kwargs):
+        captured.update(kwargs)
+        return original_popen(*args, **kwargs)
+
+    import web.jobs as jobs_module
+
+    original = jobs_module.subprocess.Popen
+    jobs_module.subprocess.Popen = recording_popen
+    try:
+        pid = jobs.spawn(job["id"], api_key="AIzaSyFAKE")
+    finally:
+        jobs_module.subprocess.Popen = original
+
+    assert captured.get("stdin") is subprocess.DEVNULL
+    # Va van phai o nhom tien trinh rieng, neu khong Huy se ban tin hieu vao
+    # ca nhom cua server.
+    assert captured.get("start_new_session") is True
+    assert os.getpgid(pid) == pid
+    jobs.cancel(job["id"])
+
+
+def test_spawn_records_the_process_start_time(monkeypatch):
+    """Chi so PID thi khong dinh danh duoc mot tien trinh (he dieu hanh tai
+    su dung PID). spawn() phai luu kem thoi diem bat dau de sau nay con doi
+    chieu."""
+    monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
+    monkeypatch.setenv("SB_FAKE_SLEEP", "30")
+    job = make_job()
+    pid = jobs.spawn(job["id"], api_key="AIzaSyFAKE")
+
+    stored = jobs.read_job(job["id"])
+    assert stored["pid"] == pid
+    assert stored["pid_start"]
+    assert stored["pid_start"] == jobs.process_start_time(pid)
+    assert jobs.pid_is_ours(stored)
+
+    jobs.cancel(job["id"])
+
+
+def test_reap_orphans_does_not_trust_a_recycled_pid():
+    """Sau khi server khoi dong lai, _PROCESSES rong nen chi con PID tren
+    dia de doi chieu. Mot PID da bi tai su dung doc ra la "con song", va
+    truoc khi sua thi job dung nguyen "running" mai mai, giu mat cho chay duy
+    nhat. Thoi diem bat dau khong khop thi phai coi la khong phai cua minh."""
+    job = make_job()
+    intruder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        jobs.set_status(
+            job["id"],
+            "running",
+            pid=intruder.pid,
+            pid_start="Mon Jan  1 00:00:00 2001",  # khong the la thoi diem that
+        )
+
+        reaped = jobs.reap_orphans()
+
+        assert job["id"] in reaped
+        assert jobs.read_job(job["id"])["status"] == "interrupted"
+        # Va khong duoc dong vao tien trinh la do.
+        assert intruder.poll() is None
+    finally:
+        intruder.kill()
+        intruder.wait()
+
+
+def test_cancel_does_not_signal_a_recycled_pid():
+    """Cung goc van de, o phia nguy hiem hon: Huy chay os.killpg vao bat cu
+    ai dang giu PID do. Neu thoi diem bat dau khong khop, tuyet doi khong
+    duoc gui tin hieu - chi ghi trang thai "cancelled"."""
+    job = make_job()
+    intruder = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True
+    )
+    try:
+        jobs.set_status(
+            job["id"], "running", pid=intruder.pid, pid_start="Mon Jan  1 00:00:00 2001"
+        )
+
+        cancelled = jobs.cancel(job["id"])
+
+        assert cancelled["status"] == "cancelled"
+        time.sleep(0.3)
+        assert intruder.poll() is None, "Huy da giet nham mot tien trinh khong phai cua job"
+    finally:
+        intruder.kill()
+        intruder.wait()

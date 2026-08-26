@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from web import artifacts, jobs
+from web.schemas import CreateJobRequest, JobParams
 from web.server import app
 
 client = TestClient(app)
@@ -140,3 +141,32 @@ def test_file_route_blocks_embedded_nul_byte(monkeypatch):
     # a Python string constructed in-process.
     resp = client.get(f"/api/jobs/{job_id}/file", params={"path": "log.txt\x00"})
     assert resp.status_code == 403
+
+
+def test_collect_ignores_a_plain_file_named_like_a_run_directory(monkeypatch):
+    """`output/run_*` duoc khop theo TEN. Mot file thuong mang ten do (nguoi
+    dung copy nham, mot ban tai do dang...) lam iterdir() nem
+    NotADirectoryError, va truoc khi sua thi ca route artifacts tra ve 500 -
+    khong xem duoc gi ca, ke ca cac scene da sinh thanh cong."""
+    job_id = finished_job(monkeypatch)
+    (jobs.job_dir(job_id) / "output" / "run_khong_phai_thu_muc").write_text("x")
+
+    tree = artifacts.collect(job_id)
+
+    # Cac scene that van con nguyen, thu la kia chi bi bo qua.
+    assert len(tree["scenes"]) == 2
+    assert client.get(f"/api/jobs/{job_id}/artifacts").status_code == 200
+
+
+def test_artifacts_route_survives_an_output_tree_with_only_a_bogus_run_file():
+    job = jobs.create_job(
+        CreateJobRequest(params=JobParams(context="Bogus run")), key_source="server"
+    )
+    output = jobs.job_dir(job["id"]) / "output"
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "run_1").write_text("khong phai thu muc")
+
+    resp = client.get(f"/api/jobs/{job['id']}/artifacts")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"scenes": [], "final_video": None}

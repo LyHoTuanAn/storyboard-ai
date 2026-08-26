@@ -2,12 +2,23 @@
 
 ## Chay lan dau
 
+Tu thu muc goc cua repo. Buoc dau tien la tao moi truong ao Python va cai
+thu vien; moi lenh Python phia sau deu chay bang `.venv/bin/...`, khong dung
+`python` he thong.
+
 ```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 cd web/frontend && npm install && npm run build && cd ../..
 .venv/bin/uvicorn web.server:app --port 8000
 ```
 
 Mo http://127.0.0.1:8000
+
+`requirements.txt` gom ca thu vien cua pipeline (google-genai, opencv...) va
+cua tang web (fastapi, uvicorn, pydantic). Neu chi muon chay giao dien o che
+do gia lap (xem duoi) thi pipeline khong duoc goi toi, nhung cach cai van la
+mot lenh nhu tren.
 
 ## Che do phat trien
 
@@ -27,8 +38,9 @@ SB_FAKE_PIPELINE=1 .venv/bin/uvicorn web.server:app --port 8000
 ```
 
 Pipeline gia lap in log mau va tao file gia, khong goi API nao. Day la cach
-de thu toan bo luong (tao job, xem log realtime, xem scene, xoa job) truoc
-khi co GEMINI_API_KEY that.
+de thu luong chinh (tao job, xem log realtime, xem scene, huy job) truoc khi
+co GEMINI_API_KEY that. Luu y: giao dien chua co nut xoa job, nen buoc xoa
+chi thu duoc bang API (`DELETE /api/jobs/{id}`), khong thu duoc tu man hinh.
 
 Bien phu tro khi thu:
 
@@ -41,6 +53,7 @@ Bien phu tro khi thu:
 |---|---|---|
 | SB_MAX_CONCURRENT | 1 | So job chay song song |
 | SB_JOBS_DIR | output/jobs | Noi chua job |
+| SB_REPO_ROOT | (thu muc repo) | Goc du lieu du an: noi tim `genai-pipeline/.env` va `output/`. Chi dung cho test; khong can dat khi chay that |
 | SB_HOST | 127.0.0.1 | Dia chi lang nghe |
 | SB_PORT | 8000 | Cong |
 | SB_FAKE_PIPELINE | (khong dat) | Dat = 1 de chay pipeline gia lap, khong goi API nao |
@@ -53,7 +66,8 @@ Bien phu tro khi thu:
 
 Ghi chu: `SB_MODEL_NAME`, `SB_IMAGE_GEN_MODEL`, `SB_TTS_MODEL` doc boi
 `genai-pipeline/config.py`, khong phai `web/settings.py`. `web/settings.py`
-chi doc `SB_MAX_CONCURRENT`, `SB_JOBS_DIR`, `SB_HOST`, `SB_PORT`.
+chi doc `SB_MAX_CONCURRENT`, `SB_JOBS_DIR`, `SB_REPO_ROOT`, `SB_HOST`,
+`SB_PORT`.
 
 ## Xu ly su co
 
@@ -80,22 +94,36 @@ do, khong can doi vong lap nen. Muon nhieu job chay song song hon thi dat
 mot lan luc server khoi dong, doi gia tri trong luc server dang chay khong
 co tac dung.
 
+Mot truong hop khac: job dung key rieng ban nhap tren form, va server da
+khoi dong lai trong luc job con dang cho. Key rieng chi duoc giu trong bo
+nho server, khong bao gio ghi xuong dia, nen sau khi restart no khong con -
+job do se chuyen sang "Hong" kem loi giai thich, thay vi cho mai mai. Tao
+lai job voi key la xong.
+
 **Mot job hien "Bi ngat".**
 Tien trinh thuc su chay job da chet ma khong tu bao ket qua (vi du server bi
 restart giua chung, hoac tien trinh bi kill tu ben ngoai). Server phat hien
-va gan trang thai nay khi vong "quet don" cac job mo coi chay - dieu nay xay
-ra luc server khoi dong, va sau do lai cho moi lan co job moi duoc tao hoac
-bi huy.
+va gan trang thai nay khi vong "quet don" cac job mo coi chay: luc server
+khoi dong, moi 3 giay mot lan trong vong lap nen rut hang doi, va them mot
+lan nua nhu tac dung phu cua moi lan tao hoac huy job. Tuc la khong can lam
+gi de mot job mo coi duoc phat hien, cham nhat khoang 3 giay.
+
+Server nhan dien tien trinh cua job bang CA hai thu: so PID va thoi diem
+tien trinh do bat dau. He dieu hanh tai su dung PID, nen chi so PID thoi la
+khong du - sau khi server khoi dong lai, mot PID cu co the da thuoc ve tien
+trinh khac. Neu thoi diem bat dau khong khop (hoac ban ghi cu chua luu gia
+tri nay), job duoc coi la "Bi ngat" va nha cho chay ra, va nut Huy se khong
+ban tin hieu vao PID do.
 
 **Mot job hien "Loi file".**
 File `job.json` cua job do khong doc duoc (dia hong, bi sua tay, ghi do dang
 luc doc trung...). Ban ghi trang thai khong con doc duoc, nhung anh/audio/
 video da sinh ra truoc do van con nguyen tren dia, trong thu muc cua job
 (`SB_JOBS_DIR/<job_id>/`). Luu y: giao dien hien tai chua co nut xoa cho bat
-ky job nao (kha nang xoa moi chi ton tai o API `DELETE /api/jobs/{id}`, va
-API do cung tu choi xoa job dang o trang thai "Loi file" - chi xoa duoc job
-da o trang thai xong/hong/da huy/bi ngat). Muon don mot job loi file, hay
-xoa thu muc cua no bang tay.
+ky job nao, kha nang xoa moi chi ton tai o API `DELETE /api/jobs/{id}`. API
+do xoa duoc job "Loi file" (cung nhu job da xong/hong/da huy/bi ngat), chi
+tu choi job dang cho hoac dang chay - huy truoc roi xoa. Neu khong muon dung
+API, cu xoa thu muc cua job bang tay.
 
 **Nhat ky ngung cap nhat giua chung mot job dai.**
 Ket noi SSE (luong su kien) tu dong dong sau khoang 10 phut khong co dong

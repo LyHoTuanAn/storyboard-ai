@@ -67,7 +67,11 @@ def safe_path(job_id: str, relative: str) -> Path:
 
 
 def _first(directory: Path, suffixes: set[str], root: Path) -> str | None:
-    for item in sorted(directory.iterdir()):
+    try:
+        entries = sorted(directory.iterdir())
+    except OSError:
+        return None
+    for item in entries:
         if item.is_file() and item.suffix.lower() in suffixes:
             return str(item.relative_to(root))
     return None
@@ -80,11 +84,20 @@ def collect(job_id: str) -> dict:
 
     output_dir = root / "output"
     for run_dir in sorted(output_dir.glob("run_*")) if output_dir.exists() else []:
-        for candidate in run_dir.iterdir():
+        # glob("run_*") khop theo TEN, khong theo kieu: mot file thuong (hay
+        # mot symlink hong) ten "run_gi_do" cung khop, va iterdir() tren no
+        # nem NotADirectoryError - du de bien ca route artifacts thanh loi
+        # 500. Chi doc nhung gi that su la thu muc; thu khac thi bo qua.
+        try:
+            entries = sorted(run_dir.iterdir()) if run_dir.is_dir() else []
+        except OSError:
+            continue
+
+        for candidate in entries:
             if candidate.is_file() and candidate.name == "storyboard_final_video.mp4":
                 final_video = str(candidate.relative_to(root))
 
-        for scene_dir in sorted(run_dir.iterdir()):
+        for scene_dir in entries:
             match = SCENE_DIR.match(scene_dir.name) if scene_dir.is_dir() else None
             if not match:
                 continue

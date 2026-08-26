@@ -1,17 +1,56 @@
 """Chay trong tien trinh con. Khong bao giờ import boi web/server.py."""
 
+import io
 import os
 import sys
 import time
 from pathlib import Path
 
 from web import jobs
+from web.progress import redact
 
 RESEARCH_LABEL = {
     "deep": "Performing Deep Research...",
     "web": "Performing Web-Grounded Research (Fast)...",
     "none": "Skipping Research as per request. Using provided context directly.",
 }
+
+
+class _RedactingStream(io.TextIOBase):
+    """Boc stdout/stderr cua tien trinh con, loc key truoc khi ghi.
+
+    Day la cho GAN NHAT voi luc ghi ma ta con kiem soat duoc: spawn() noi
+    thang stdout cua tien trinh nay vao log.txt, nen bat cu thu gi qua duoc
+    day la da nam tren dia. Mot thong bao loi cua google.genai co the chua ca
+    URL yeu cau kem "?key=AIza..."; loc o day nghia la key khong bao gio duoc
+    ghi vao log.txt ngay tu dau, thay vi trong cho tung noi doc log nho loc.
+
+    Ghi theo tung lan write() chu khong gom dong: cac mau key deu nam gon
+    trong mot dong va print() thuong ghi ca dong mot lan, con viec gom dong o
+    day se lam tre dau ra (SSE dang doc log.txt theo thoi gian thuc).
+    """
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, text: str) -> int:
+        self._stream.write(redact(text))
+        return len(text)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def isatty(self) -> bool:
+        return False
+
+    @property
+    def encoding(self) -> str:
+        return getattr(self._stream, "encoding", "utf-8")
+
+
+def install_redacting_output() -> None:
+    sys.stdout = _RedactingStream(sys.stdout)
+    sys.stderr = _RedactingStream(sys.stderr)
 
 
 def run_fake(job: dict) -> str:
@@ -75,6 +114,7 @@ def run_real(job: dict) -> str:
 
 
 def main(job_id: str) -> int:
+    install_redacting_output()
     job = jobs.read_job(job_id)
     try:
         if os.getenv("SB_FAKE_PIPELINE") == "1":
@@ -82,9 +122,14 @@ def main(job_id: str) -> int:
         else:
             video = run_real(job)
     except Exception as error:  # noqa: BLE001 - phai bat het de ghi vao job.json
-        print(f"PIPELINE ERROR: {error}")
+        # redact() ca o day chu khong chi dua vao stdout da boc: chuoi nay di
+        # vao job.json (roi ra REST va man hinh), mot duong ra khac han
+        # duong log. jobs.set_status() cung loc lan nua - ba lop, vi mot
+        # thong bao loi cua google.genai la noi de lo key nhat.
+        message = redact(str(error))
+        print(f"PIPELINE ERROR: {message}")
         try:
-            jobs.set_status(job_id, "failed", error=str(error), exit_code=1)
+            jobs.set_status(job_id, "failed", error=message, exit_code=1)
         except jobs.InvalidTransition:
             print(f"Job {job_id} was already finalized elsewhere (e.g. cancelled).")
         return 1

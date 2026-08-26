@@ -6,3 +6,12 @@ opencv-python
 numpy
 Pillow
 requests
+
+# Web UI (web/) - phien ban tuong ung voi cai dang duoc cai trong .venv
+fastapi>=0.141.1
+uvicorn>=0.52.4
+pydantic>=2.13.4
+
+# Chi can de chay bo test (.venv/bin/pytest -q); khong can de chay server
+pytest>=9.1.1
+httpx>=0.28.1

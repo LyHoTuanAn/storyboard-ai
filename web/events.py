@@ -17,16 +17,25 @@ IDLE_TIMEOUT = 600.0
 END_STATUSES = jobs.TERMINAL | {"corrupt"}
 
 
-def format_sse(event: str, data: dict, offset: int, index: int = 0) -> str:
+def format_sse(event: str, data: dict, offset: int | None, index: int = 0) -> str:
     """`id:` is `<offset>:<index>` - offset is the byte position of the
     START of the log line this event was derived from, index is this
     event's 0-based position among the (possibly several) events produced
     for that same line (the `log` event itself, plus 0-1 derived
     step/scene/activity/warning events). Giving every event its own id -
     not just every line - lets a client resume from the exact event it last
-    received instead of only from the last fully-consumed line."""
+    received instead of only from the last fully-consumed line.
+
+    `offset=None` emits NO `id:` line at all. That is the correct frame for
+    an event that was not derived from a log line (the `status` event): an
+    SSE frame without an id leaves the client's Last-Event-ID untouched, so
+    the next reconnect resumes from the last real log event. Giving such an
+    event an id of its own is what caused the "one log line lost per stall
+    reconnect" bug - the id pointed at a line that had not been sent yet, and
+    the resume logic then skipped that line's first event."""
     payload = json.dumps(data, ensure_ascii=False, separators=(", ", ": "))
-    return f"id: {offset}:{index}\nevent: {event}\ndata: {payload}\n\n"
+    prefix = "" if offset is None else f"id: {offset}:{index}\n"
+    return f"{prefix}event: {event}\ndata: {payload}\n\n"
 
 
 def parse_resume_id(raw: str | None) -> tuple[int, int]:
@@ -99,6 +108,13 @@ async def stream_job(job_id: str, start_offset: int = 0, skip_count: int = 0):
     cursor = start_offset
     pending_skip = skip_count
     idle = 0.0
+    # Id cua su kien CUOI CUNG that su da gui di trong ket noi nay, hoac None
+    # neu chua gui gi. Su kien "status" muon dung lai chinh id nay - no khong
+    # sinh ra tu mot dong log nao ca, va neu tu dat cho minh mot id moi
+    # (truoc day la `cursor:0`, tuc dong KE TIEP chua gui) thi lan ket noi
+    # lai se bo qua dung dong do.
+    last_offset: int | None = None
+    last_index = 0
 
     while True:
         job = await asyncio.to_thread(jobs.read_job, job_id)
@@ -116,6 +132,7 @@ async def stream_job(job_id: str, start_offset: int = 0, skip_count: int = 0):
             for index, (name, data) in enumerate(produced):
                 if index < skip_here:
                     continue
+                last_offset, last_index = line_offset, index
                 yield format_sse(name, data, line_offset, index)
 
             cursor = line_end
@@ -130,12 +147,15 @@ async def stream_job(job_id: str, start_offset: int = 0, skip_count: int = 0):
                     "result_video": job.get("result_video"),
                     "error": redact(job["error"]) if job.get("error") else None,
                 },
-                cursor,
+                last_offset,
+                last_index,
             )
             return
 
         await asyncio.sleep(POLL_SECONDS)
         idle += POLL_SECONDS
         if idle >= IDLE_TIMEOUT:
-            yield format_sse("status", {"status": job["status"], "stalled": True}, cursor)
+            yield format_sse(
+                "status", {"status": job["status"], "stalled": True}, last_offset, last_index
+            )
             return

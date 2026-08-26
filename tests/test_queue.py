@@ -200,3 +200,112 @@ def test_pump_is_safe_under_concurrent_callers(monkeypatch):
                 jobs.cancel(job_id)
             except jobs.InvalidTransition:
                 pass
+
+
+def test_pump_fails_a_user_key_job_whose_key_is_no_longer_remembered():
+    """Key rieng cua nguoi dung chi song trong bo nho server. Sau khi server
+    khoi dong lai, mot job "queued" dung key rieng van con tren dia nhung key
+    thi khong - va khong co gi lam no xuat hien tro lai. Truoc khi sua,
+    pump() chi `continue`, tuc thu lai job do moi 3 giay, mai mai, khong bao
+    gio bao cho ai biet. No phai duoc bao hong kem ly do."""
+    from web import keys
+
+    job = jobs.create_job(
+        CreateJobRequest(params=JobParams(context="Key da mat")), key_source="user"
+    )
+    assert not keys.is_remembered(job["id"])
+
+    assert jobs.pump(keys.resolve) == []
+
+    failed = jobs.read_job(job["id"])
+    assert failed["status"] == "failed"
+    assert "key" in failed["error"].lower()
+    # Va khong lap: luot bom ke tiep khong con thay no trong hang doi nua.
+    assert jobs.pump(keys.resolve) == []
+    assert jobs.read_job(job["id"])["status"] == "failed"
+
+
+def test_pump_keeps_waiting_for_a_server_key_job_with_no_key_yet():
+    """Doi lap voi bai tren: key server nam trong genai-pipeline/.env, nguoi
+    dung co the them no vao trong luc job dang cho. Job do phai duoc cho tiep,
+    khong bi bao hong."""
+    from web import keys
+
+    job = make_job()
+    assert jobs.pump(keys.resolve) == []
+    assert jobs.read_job(job["id"])["status"] == "queued"
+
+
+def test_spawn_refuses_a_job_that_is_no_longer_queued(monkeypatch):
+    """pump() duyet mot anh chup cua list_jobs(status="queued"). Neu job bi
+    Huy sau luc chup do, spawn() phai tu choi thay vi van phong tien trinh."""
+    monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
+    job = make_job()
+    jobs.cancel(job["id"])
+
+    with pytest.raises(jobs.InvalidTransition):
+        jobs.spawn(job["id"], api_key="AIzaSyFAKE")
+
+    assert job["id"] not in jobs._PROCESSES
+    assert jobs.read_job(job["id"])["status"] == "cancelled"
+
+
+def test_spawn_kills_the_child_if_the_job_is_finalized_mid_launch(monkeypatch):
+    """Tinh huong toi te nhat cua cuoc dua Huy/bom: lenh Huy dap xuong dung
+    khe giua Popen() va set_status(..., "running"). Truoc khi sua, pump() nuot
+    InvalidTransition va tien trinh con o lai chay tiep - nguoi dung thay "Da
+    huy" trong khi quota API van bi dot va khong con cach nao giet no tu giao
+    dien. spawn() phai giet dua con vua sinh ra."""
+    monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
+    monkeypatch.setenv("SB_FAKE_SLEEP", "30")
+    job = make_job()
+
+    original_set_status = jobs.set_status
+    launched = {}
+
+    def cancel_lands_now(job_id, status, **fields):
+        if status == "running":
+            launched["pid"] = fields.get("pid")
+            # Lenh Huy thang cuoc dua: job da la terminal truoc khi spawn kip
+            # ghi "running".
+            original_set_status(job_id, "cancelled")
+        return original_set_status(job_id, status, **fields)
+
+    monkeypatch.setattr(jobs, "set_status", cancel_lands_now)
+
+    with pytest.raises(jobs.InvalidTransition):
+        jobs.spawn(job["id"], api_key="AIzaSyFAKE")
+
+    pid = launched["pid"]
+    assert pid, "spawn phai da phong tien trinh truoc khi phat hien cuoc dua"
+    assert job["id"] not in jobs._PROCESSES
+    for _ in range(50):
+        if not jobs.pid_alive(pid):
+            break
+        time.sleep(0.1)
+    assert not jobs.pid_alive(pid), (
+        "tien trinh con bi bo roi: job da 'cancelled' nhung tien trinh that van song"
+    )
+
+
+def test_cancel_runs_inside_the_same_critical_section_as_pump():
+    """cancel() phai lay CUNG mot khoa ma pump() giu. Neu no chay xen giua
+    mot vong bom, thu tu "pump thay job queued -> cancel ghi cancelled ->
+    pump Popen" tro nen kha di, va do la con duong dan toi mot tien trinh mo
+    coi. Kiem bang cach giu khoa va chung minh cancel() phai doi."""
+    job = make_job()
+    finished = threading.Event()
+
+    def cancel_in_background():
+        jobs.cancel(job["id"])
+        finished.set()
+
+    worker = threading.Thread(target=cancel_in_background)
+    with jobs.pump_lock():
+        worker.start()
+        assert not finished.wait(0.5), "cancel() khong lay khoa cua pump()"
+        assert jobs.read_job(job["id"])["status"] == "queued"
+
+    worker.join(timeout=5)
+    assert finished.is_set()
+    assert jobs.read_job(job["id"])["status"] == "cancelled"

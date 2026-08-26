@@ -28,7 +28,19 @@ const MAX_LINES = 2000;
 // nua. Bat ky status nao khac (bao gom trang thai "stalled" ma server
 // gui khi im lang qua 600s trong luc job VAN dang running) khong duoc
 // dong ket noi hay ghi de vao state status.
-const TERMINAL_STATUSES: readonly JobStatus[] = ["done", "failed", "cancelled", "interrupted"];
+//
+// "corrupt" PHAI co mat o day: phia server, web/events.py ket thuc luong
+// ngay lap tuc cho trang thai nay (END_STATUSES). Neu client khong coi no
+// la ket thuc, EventSource se tu ket noi lai sau moi lan server dong -
+// khoang 3 giay mot lan, mai mai - va giao dien hien goi y "dang im lang"
+// thay vi trang thai loi file. Hai tap hop nay phai luon khop nhau.
+const TERMINAL_STATUSES: readonly JobStatus[] = [
+  "done",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "corrupt",
+];
 
 function parsePayload<T>(event: Event): T | null {
   const raw = (event as MessageEvent).data;
@@ -41,7 +53,13 @@ function parsePayload<T>(event: Event): T | null {
   }
 }
 
-export function useJobEvents(jobId: string | null) {
+/**
+ * @param enabled Mo luong hay khong. Nguoi goi dat `false` khi da biet
+ * khong co gi de nghe (job "corrupt": server se dong luong ngay, va
+ * JobDetail cung an luon khung nhat ky) - mo roi dong ngay chi tao ra mot
+ * vong ket noi thua.
+ */
+export function useJobEvents(jobId: string | null, enabled = true) {
   const [lines, setLines] = useState<string[]>([]);
   const [step, setStep] = useState<StepPayload | null>(null);
   const [scene, setScene] = useState<SceneProgress | null>(null);
@@ -57,7 +75,7 @@ export function useJobEvents(jobId: string | null) {
     setStatus(null);
     setStalled(false);
 
-    if (!jobId) return;
+    if (!jobId || !enabled) return;
 
     const source = new EventSource(`/api/jobs/${jobId}/events`);
 
@@ -107,7 +125,7 @@ export function useJobEvents(jobId: string | null) {
     return () => {
       source.close();
     };
-  }, [jobId]);
+  }, [jobId, enabled]);
 
   return { lines, step, scene, warnings, status, stalled };
 }

@@ -17,7 +17,7 @@ def test_fake_runner_completes_and_writes_artifacts():
     env = dict(os.environ)
     env["SB_FAKE_PIPELINE"] = "1"
     env["SB_JOBS_DIR"] = str(get_settings().jobs_dir)
-    env["PYTHONPATH"] = str(get_settings().repo_root)
+    env["PYTHONPATH"] = str(get_settings().code_root)
 
     with (directory / "log.txt").open("ab") as log:
         exit_code = subprocess.call(
@@ -50,7 +50,7 @@ def test_fake_runner_emits_a_skipped_scene_warning():
     env["SB_FAKE_PIPELINE"] = "1"
     env["SB_FAKE_SKIP_SCENE"] = "2"
     env["SB_JOBS_DIR"] = str(get_settings().jobs_dir)
-    env["PYTHONPATH"] = str(get_settings().repo_root)
+    env["PYTHONPATH"] = str(get_settings().code_root)
 
     with (directory / "log.txt").open("ab") as log:
         subprocess.call(
@@ -76,7 +76,7 @@ def test_fake_runner_tolerates_concurrent_cancellation():
     env = dict(os.environ)
     env["SB_FAKE_PIPELINE"] = "1"
     env["SB_JOBS_DIR"] = str(get_settings().jobs_dir)
-    env["PYTHONPATH"] = str(get_settings().repo_root)
+    env["PYTHONPATH"] = str(get_settings().code_root)
 
     with (directory / "log.txt").open("ab") as log:
         exit_code = subprocess.call(
