@@ -4,6 +4,7 @@ import { applyTheme, getStoredTheme, type ThemeMode } from "./theme";
 
 export default function App() {
   const [mode, setMode] = useState<ThemeMode>(getStoredTheme);
+  const nextLabel = mode === "dark" ? "Chuyen sang giao dien sang" : "Chuyen sang giao dien toi";
 
   useEffect(() => {
     applyTheme(mode);
@@ -16,9 +17,9 @@ export default function App() {
         <button
           type="button"
           onClick={() => setMode(mode === "dark" ? "light" : "dark")}
-          className="rounded px-3 py-2 transition-transform active:scale-[0.98]"
+          className="px-3 py-2 transition-transform active:scale-[0.98]"
           style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)" }}
-          aria-label="Doi giao dien sang toi"
+          aria-label={nextLabel}
         >
           {mode === "dark" ? <SunIcon size={18} /> : <MoonIcon size={18} />}
         </button>

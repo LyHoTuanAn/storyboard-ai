@@ -5,6 +5,21 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Storyboard AI</title>
+    <script>
+      (function () {
+        var STORAGE_KEY = "sb-theme";
+        var mode = "system";
+        try {
+          var value = localStorage.getItem(STORAGE_KEY);
+          if (value === "light" || value === "dark" || value === "system") mode = value;
+        } catch (e) {
+          // localStorage co the bi chan; roi ve system
+        }
+        var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var dark = mode === "dark" || (mode === "system" && prefersDark);
+        document.documentElement.classList.toggle("dark", dark);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
