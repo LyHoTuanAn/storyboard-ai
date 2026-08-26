@@ -1,0 +1,58 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --border: #e4e4e2;
+  --text: #1c1c1a;
+  --text-dim: #6b6b66;
+  --accent: #1d6f5c;
+  --radius: 6px;
+
+  --st-queued: #8a8a84;
+  --st-running: #1d6f5c;
+  --st-done: #3f7d3a;
+  --st-failed: #a63636;
+  --st-cancelled: #8a8a84;
+  --st-interrupted: #9a6a1f;
+}
+
+.dark {
+  --bg: #131312;
+  --surface: #1b1b19;
+  --border: #2e2e2b;
+  --text: #eceae5;
+  --text-dim: #9a9a93;
+  --accent: #4fb094;
+
+  --st-queued: #7d7d77;
+  --st-running: #4fb094;
+  --st-done: #6fae68;
+  --st-failed: #d97070;
+  --st-cancelled: #7d7d77;
+  --st-interrupted: #cfa055;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Geist Variable", system-ui, sans-serif;
+}
+
+.mono {
+  font-family: "Geist Mono Variable", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

@@ -147,3 +147,12 @@ def delete_job(job_id: str):
     shutil.rmtree(jobs.job_dir(job_id), ignore_errors=True)
     keys.forget(job_id)
     return Response(status_code=204)
+
+
+from fastapi.staticfiles import StaticFiles
+
+from web.settings import get_settings
+
+_DIST = get_settings().repo_root / "web" / "frontend" / "dist"
+if _DIST.exists():
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="frontend")
