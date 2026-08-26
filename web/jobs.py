@@ -1,6 +1,9 @@
 import json
 import os
 import secrets
+import signal
+import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -115,3 +118,67 @@ def set_status(job_id: str, status: str, **fields) -> dict:
     job.update(fields)
     write_job(job)
     return job
+
+
+def build_env(job: dict, api_key: str) -> dict:
+    settings = get_settings()
+    env = dict(os.environ)
+    env["GEMINI_API_KEY"] = api_key
+    env["SB_JOBS_DIR"] = str(settings.jobs_dir)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(settings.repo_root), str(settings.repo_root / "genai-pipeline")]
+    )
+    for name, value in job["models"].items():
+        if value:
+            env[f"SB_{name}"] = value
+    return env
+
+
+def spawn(job_id: str, api_key: str) -> int:
+    directory = job_dir(job_id)
+    job = read_job(job_id)
+    log_path = directory / "log.txt"
+    with log_path.open("ab") as log:
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-m", "web.runner", job_id],
+            cwd=directory,
+            env=build_env(job, api_key),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    set_status(job_id, "running", pid=process.pid)
+    return process.pid
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def log_tail(job_id: str, lines: int = 50) -> str:
+    log_path = job_dir(job_id) / "log.txt"
+    if not log_path.exists():
+        return ""
+    content = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return "\n".join(content[-lines:])
+
+
+def reap_orphans() -> list[str]:
+    reaped = []
+    for job in list_jobs(status="running"):
+        pid = job.get("pid")
+        if pid is None or not pid_alive(pid):
+            set_status(
+                job["id"],
+                "interrupted",
+                error="Tien trinh chay job da chet ma khong bao ket qua.\n\n"
+                + log_tail(job["id"]),
+            )
+            reaped.append(job["id"])
+    return reaped
