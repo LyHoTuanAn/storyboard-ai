@@ -2,10 +2,14 @@ import { useEffect, useState } from "react";
 import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 import { applyTheme, getStoredTheme, type ThemeMode } from "./theme";
 import { JobForm } from "./components/JobForm";
+import { JobList } from "./components/JobList";
+import { HealthBanner } from "./components/HealthBanner";
+import { useJobs } from "./hooks/useJobs";
 
 export default function App() {
   const [mode, setMode] = useState<ThemeMode>(getStoredTheme);
   const [selected, setSelected] = useState<string | null>(null);
+  const { jobs, refresh } = useJobs();
   const nextLabel = mode === "dark" ? "Chuyen sang giao dien sang" : "Chuyen sang giao dien toi";
 
   useEffect(() => {
@@ -26,10 +30,20 @@ export default function App() {
           {mode === "dark" ? <SunIcon size={18} /> : <MoonIcon size={18} />}
         </button>
       </header>
-      <main className="mx-auto mt-6 grid max-w-[1400px] gap-8 md:grid-cols-[320px_1fr]">
+      <div className="mx-auto mt-6 max-w-[1400px]">
+        <HealthBanner />
+      </div>
+      <main className="mx-auto mt-2 grid max-w-[1400px] gap-8 md:grid-cols-[320px_1fr]">
         <aside>
           <h2 className="mb-4 text-sm font-semibold">Job moi</h2>
-          <JobForm onCreated={(id) => setSelected(id)} />
+          <JobForm
+            onCreated={(id) => {
+              setSelected(id);
+              refresh();
+            }}
+          />
+          <h2 className="mt-8 mb-3 text-sm font-semibold">Lan chay</h2>
+          <JobList jobs={jobs} selected={selected} onSelect={setSelected} />
         </aside>
         <section>
           {selected ? (
