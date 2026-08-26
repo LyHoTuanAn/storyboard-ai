@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { JobStatus } from "../types";
 
 export interface SceneProgress {
@@ -18,9 +18,17 @@ interface StepPayload {
 
 interface StatusPayload {
   status: JobStatus;
+  stalled?: boolean;
 }
 
 const MAX_LINES = 2000;
+
+// Trang thai duoc coi la "ket thuc that su" - khi status event mang mot
+// trong nhung gia tri nay, job da xong va se khong co su kien nao khac
+// nua. Bat ky status nao khac (bao gom trang thai "stalled" ma server
+// gui khi im lang qua 600s trong luc job VAN dang running) khong duoc
+// dong ket noi hay ghi de vao state status.
+const TERMINAL_STATUSES: readonly JobStatus[] = ["done", "failed", "cancelled", "interrupted"];
 
 function parsePayload<T>(event: Event): T | null {
   const raw = (event as MessageEvent).data;
@@ -39,7 +47,7 @@ export function useJobEvents(jobId: string | null) {
   const [scene, setScene] = useState<SceneProgress | null>(null);
   const [warnings, setWarnings] = useState<JobWarning[]>([]);
   const [status, setStatus] = useState<JobStatus | null>(null);
-  const sourceRef = useRef<EventSource | null>(null);
+  const [stalled, setStalled] = useState(false);
 
   useEffect(() => {
     setLines([]);
@@ -47,13 +55,14 @@ export function useJobEvents(jobId: string | null) {
     setScene(null);
     setWarnings([]);
     setStatus(null);
+    setStalled(false);
 
     if (!jobId) return;
 
     const source = new EventSource(`/api/jobs/${jobId}/events`);
-    sourceRef.current = source;
 
     source.addEventListener("log", (event) => {
+      setStalled(false);
       const payload = parsePayload<{ line: string }>(event);
       if (!payload) return;
       setLines((prev) => {
@@ -62,28 +71,43 @@ export function useJobEvents(jobId: string | null) {
       });
     });
     source.addEventListener("step", (event) => {
+      setStalled(false);
       const payload = parsePayload<StepPayload>(event);
       if (payload) setStep(payload);
     });
     source.addEventListener("scene", (event) => {
+      setStalled(false);
       const payload = parsePayload<SceneProgress>(event);
       if (payload) setScene(payload);
     });
     source.addEventListener("warning", (event) => {
+      setStalled(false);
       const payload = parsePayload<JobWarning>(event);
       if (payload) setWarnings((prev) => [...prev, payload]);
     });
     source.addEventListener("status", (event) => {
+      setStalled(false);
       const payload = parsePayload<StatusPayload>(event);
-      if (payload) setStatus(payload.status);
+      if (!payload) return;
+
+      if (!TERMINAL_STATUSES.includes(payload.status)) {
+        // Server bao im lang (stalled) trong khi job van dang chay - KHONG
+        // dong ket noi va KHONG ghi trang thai nay vao state, neu khong
+        // downstream se tuong job da ket thuc. De ket noi mo: khi server
+        // ket thuc response, EventSource tu dong ket noi lai va gui lai
+        // Last-Event-ID, luong se tiep tuc dung cho o cho no dung.
+        setStalled(true);
+        return;
+      }
+
+      setStatus(payload.status);
       source.close();
     });
 
     return () => {
       source.close();
-      sourceRef.current = null;
     };
   }, [jobId]);
 
-  return { lines, step, scene, warnings, status };
+  return { lines, step, scene, warnings, status, stalled };
 }
