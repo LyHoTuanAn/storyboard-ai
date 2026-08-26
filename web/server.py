@@ -1,3 +1,6 @@
+import asyncio
+import contextlib
+import logging
 import shutil
 from contextlib import asynccontextmanager
 
@@ -9,11 +12,59 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from web import artifacts, events, jobs, keys
 from web.schemas import CreateJobRequest
 
+logger = logging.getLogger(__name__)
+
+# Nothing calls jobs.pump() when a job finishes on its own - it is only
+# invoked from the create-job and cancel-job routes above, as a side effect
+# of *those* requests. Without something else draining the queue, a queued
+# job started behind a still-running one at SB_MAX_CONCURRENT stays "queued"
+# forever unless a user happens to create or cancel another job. _pump_loop()
+# below is that something else: a background task, owned by the app's
+# lifespan, that calls the same _pump_and_sweep() the routes use.
+#
+# 3 seconds: a queued job should not need a human to nudge the queue, but it
+# also does not need sub-second responsiveness the way SSE log streaming does
+# (events.py polls log.txt every 0.25s because a human is watching it live).
+# Nobody is staring at the queue waiting on this tick; a few seconds of extra
+# wait after a job finishes is unnoticeable, and anything sub-second would
+# turn this into a busy loop that reaps/lists/locks (jobs.pump() takes
+# _PUMP_LOCK and touches the filesystem) far more often than useful.
+PUMP_INTERVAL_SECONDS = 3.0
+
+
+async def _pump_loop() -> None:
+    """Background task started by lifespan(): periodically drains the job
+    queue so a job that finishes on its own (not via a create/cancel API
+    call) still lets the next queued job start. jobs.pump() does blocking
+    filesystem work and holds a lock (web/jobs.py's _PUMP_LOCK), so it is run
+    off the event loop via asyncio.to_thread - the same pattern web/events.py
+    already uses for its blocking log reads (see _read_new_lines there).
+
+    One bad iteration must not kill the loop for every job after it: if
+    _pump_and_sweep() raises, log it and keep going rather than letting the
+    exception propagate out of the task and silently end the drain.
+    """
+    while True:
+        try:
+            await asyncio.to_thread(_pump_and_sweep)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("pump loop: mot vong lap that bai, se thu lai")
+        await asyncio.sleep(PUMP_INTERVAL_SECONDS)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     jobs.reap_orphans()
-    yield
+    pump_task = asyncio.create_task(_pump_loop())
+    app.state.pump_task = pump_task  # exposed for tests (see tests/test_pump_loop.py)
+    try:
+        yield
+    finally:
+        pump_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pump_task
 
 
 app = FastAPI(title="Storyboard AI", lifespan=lifespan)

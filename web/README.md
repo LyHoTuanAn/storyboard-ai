@@ -69,11 +69,16 @@ vua tao va khong luu lai.
 **Mot job dung mai o "Cho luot", khong bao gio chay.**
 So job dang o trang thai "Dang chay" da cham `SB_MAX_CONCURRENT` (mac dinh
 1). Xem danh sach "Lan chay" o giao dien de biet job nao dang chiem cho. Job
-dang cho se tu chay tiep ngay khi mot job dang chay ket thuc (xong, hong,
-hay bi huy) - khong can lam gi them. Muon nhieu job chay song song hon thi
-dat `SB_MAX_CONCURRENT` cao hon roi khoi dong lai server; bien nay chi duoc
-doc mot lan luc server khoi dong, doi gia tri trong luc server dang chay
-khong co tac dung.
+dang cho se tu chay tiep sau khi mot job dang chay ket thuc (xong, hong, hay
+bi huy) - khong can lam gi them, nhung khong phai ngay lap tuc: server chay
+mot vong lap nen (background task) rieng, moi 3 giay kiem tra hang doi mot
+lan, nen ban co the doi toi 3 giay sau khi job truoc ket thuc thi job tiep
+theo moi bat dau. Neu ban vua tao hoac vua huy mot job khac trong luc do,
+hang doi cung duoc kiem tra ngay lap tuc nhu mot tac dung phu cua thao tac
+do, khong can doi vong lap nen. Muon nhieu job chay song song hon thi dat
+`SB_MAX_CONCURRENT` cao hon roi khoi dong lai server; bien nay chi duoc doc
+mot lan luc server khoi dong, doi gia tri trong luc server dang chay khong
+co tac dung.
 
 **Mot job hien "Bi ngat".**
 Tien trinh thuc su chay job da chet ma khong tu bao ket qua (vi du server bi
