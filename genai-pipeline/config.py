@@ -12,7 +12,8 @@ MODEL_NAME = "gemini-2.5-pro"
 DEEP_RESEARCH_MODEL = "deep-research-preview-04-2026"
 # Image Generation Model
 # IMAGE_GEN_MODEL = "gemini-2.5-flash-image"
-IMAGE_GEN_MODEL = "gemini-3-pro-image"
+# IMAGE_GEN_MODEL = "gemini-3-pro-image"   # ban goc cua repo
+IMAGE_GEN_MODEL = "gemini-3.1-flash-image"
 # TTS Model
 TTS_MODEL = "gemini-3.1-flash-tts-preview"
 # Veo Video Generation Model
