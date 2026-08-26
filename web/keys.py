@@ -1,0 +1,36 @@
+"""Giu API key trong bo nho tien trinh server. Khong bao gio ghi xuong dia.
+
+Khong ham nao trong module nay duoc de key lot vao thu gi bi log hay serialize
+(response, exception message, repr trong log...). `_KEYS` khong bao gio duoc
+tra ve nguyen ven hay expose qua route - chi truy cap gian tiep qua
+remember/forget/resolve.
+"""
+
+from web.settings import get_settings
+
+_KEYS: dict[str, str] = {}
+
+
+def server_key() -> str | None:
+    env_file = get_settings().repo_root / "genai-pipeline" / ".env"
+    if not env_file.exists():
+        return None
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        if line.startswith("GEMINI_API_KEY="):
+            value = line.split("=", 1)[1].strip().strip('"').strip("'")
+            return value or None
+    return None
+
+
+def remember(job_id: str, api_key: str) -> None:
+    _KEYS[job_id] = api_key
+
+
+def forget(job_id: str) -> None:
+    _KEYS.pop(job_id, None)
+
+
+def resolve(job: dict) -> str | None:
+    if job["key_source"] == "user":
+        return _KEYS.get(job["id"])
+    return server_key()
