@@ -25,7 +25,7 @@ def new_job_id() -> str:
 
 
 def job_dir(job_id: str) -> Path:
-    if not JOB_ID_RE.match(job_id):
+    if not JOB_ID_RE.fullmatch(job_id):
         raise JobNotFound(job_id)
     return get_settings().jobs_dir / job_id
 
@@ -56,8 +56,17 @@ def read_job(job_id: str) -> dict:
 
 
 def create_job(req: CreateJobRequest, key_source: str) -> dict:
+    job_id = None
+    for attempt in range(10):
+        candidate = new_job_id()
+        if not job_dir(candidate).exists():
+            job_id = candidate
+            break
+    if job_id is None:
+        raise RuntimeError("Could not generate unique job ID after 10 attempts")
+
     job = {
-        "id": new_job_id(),
+        "id": job_id,
         "status": "queued",
         "created_at": _now(),
         "started_at": None,

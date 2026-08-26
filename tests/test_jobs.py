@@ -64,3 +64,37 @@ def test_write_job_is_atomic_leaves_no_temp_file():
     jobs.write_job(job)
     leftovers = [p.name for p in jobs.job_dir(job["id"]).iterdir() if p.suffix == ".tmp"]
     assert leftovers == []
+
+
+def test_job_dir_rejects_id_with_trailing_newline():
+    with pytest.raises(jobs.JobNotFound):
+        jobs.job_dir("j_20260101_000000_dead\n")
+
+
+def test_create_job_retries_on_collision(monkeypatch):
+    # Create first job
+    first = jobs.create_job(make_request("first"), key_source="server")
+    first_context = first["params"]["context"]
+
+    # Monkeypatch new_job_id to return first's ID for one call, then a new ID
+    call_count = [0]
+    original_new_job_id = jobs.new_job_id
+
+    def colliding_new_job_id():
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return first["id"]  # Collide with existing job
+        return original_new_job_id()  # Generate new ID on retry
+
+    monkeypatch.setattr(jobs, "new_job_id", colliding_new_job_id)
+
+    # Try to create second job - should retry and succeed
+    second = jobs.create_job(make_request("second"), key_source="server")
+
+    # Verify first job is unchanged
+    first_reread = jobs.read_job(first["id"])
+    assert first_reread["params"]["context"] == first_context
+
+    # Verify second job is different
+    assert second["id"] != first["id"]
+    assert second["params"]["context"] == "second"
