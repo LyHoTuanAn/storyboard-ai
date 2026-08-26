@@ -79,10 +79,16 @@ def main(job_id: str) -> int:
             video = run_real(job)
     except Exception as error:  # noqa: BLE001 - phai bat het de ghi vao job.json
         print(f"PIPELINE ERROR: {error}")
-        jobs.set_status(job_id, "failed", error=str(error), exit_code=1)
+        try:
+            jobs.set_status(job_id, "failed", error=str(error), exit_code=1)
+        except jobs.InvalidTransition:
+            print(f"Job {job_id} was already finalized elsewhere (e.g. cancelled).")
         return 1
 
-    jobs.set_status(job_id, "done", result_video=video, exit_code=0)
+    try:
+        jobs.set_status(job_id, "done", result_video=video, exit_code=0)
+    except jobs.InvalidTransition:
+        print(f"Job {job_id} was already finalized elsewhere (e.g. cancelled).")
     return 0
 
 

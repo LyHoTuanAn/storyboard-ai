@@ -62,3 +62,39 @@ def test_fake_runner_emits_a_skipped_scene_warning():
         )
 
     assert "[X] SKIPPING Scene 2:" in (directory / "log.txt").read_text()
+
+
+def test_fake_runner_tolerates_concurrent_cancellation():
+    job = jobs.create_job(
+        CreateJobRequest(params=JobParams(context="Fake topic")), key_source="server"
+    )
+    directory = jobs.job_dir(job["id"])
+
+    # Simulate parent server cancelling the job while child is running
+    jobs.set_status(job["id"], "cancelled")
+
+    env = dict(os.environ)
+    env["SB_FAKE_PIPELINE"] = "1"
+    env["SB_JOBS_DIR"] = str(get_settings().jobs_dir)
+    env["PYTHONPATH"] = str(get_settings().repo_root)
+
+    with (directory / "log.txt").open("ab") as log:
+        exit_code = subprocess.call(
+            [sys.executable, "-u", "-m", "web.runner", job["id"]],
+            cwd=directory,
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+
+    # Should exit cleanly even though job was already terminal
+    assert exit_code == 0
+
+    log_text = (directory / "log.txt").read_text()
+    # Should not have Python traceback
+    assert "Traceback" not in log_text
+    assert "InvalidTransition" not in log_text
+
+    # Job status should still be cancelled
+    updated = jobs.read_job(job["id"])
+    assert updated["status"] == "cancelled"
