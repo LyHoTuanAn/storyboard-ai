@@ -26,6 +26,10 @@ from web.progress import parse_line, redact
             "  [X] SKIPPING Scene 2: Image generation failed.",
             {"event": "warning", "data": {"scene": 2, "message": "Image generation failed."}},
         ),
+        (
+            "Step 1: Doing a thing...\r\n",
+            {"event": "step", "data": {"n": 1, "label": "Doing a thing..."}},
+        ),
     ],
 )
 def test_parse_line_recognises_known_markers(line, expected):
@@ -50,6 +54,13 @@ def test_redact_hides_api_keys():
     text = 'using GEMINI_API_KEY=AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7 now'
     out = redact(text)
     assert "AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7" not in out
+    assert "***" in out
+
+
+def test_redact_hides_hugging_face_tokens():
+    text = 'using HF_API_KEY=hf_AbCdEfGhIjKlMnOpQrStUvWxYz now'
+    out = redact(text)
+    assert "hf_AbCdEfGhIjKlMnOpQrStUvWxYz" not in out
     assert "***" in out
 
 

@@ -9,6 +9,7 @@ _WARNING = re.compile(r"^\s*\[X\] SKIPPING Scene (\d+): (.+)$")
 _KEY_PATTERNS = [
     re.compile(r"AIza[0-9A-Za-z_\-]{30,}"),
     re.compile(r"sk_[0-9A-Za-z_\-]{16,}"),
+    re.compile(r"hf_[0-9A-Za-z]{20,}"),
 ]
 
 
@@ -19,7 +20,7 @@ def redact(text: str) -> str:
 
 
 def parse_line(line: str) -> dict | None:
-    line = line.rstrip("\n")
+    line = line.rstrip("\r\n")
 
     match = _WARNING.match(line)
     if match:
