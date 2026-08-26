@@ -1,3 +1,4 @@
+import subprocess
 import threading
 import time
 
@@ -238,14 +239,50 @@ def test_pump_keeps_waiting_for_a_server_key_job_with_no_key_yet():
 
 def test_spawn_refuses_a_job_that_is_no_longer_queued(monkeypatch):
     """pump() duyet mot anh chup cua list_jobs(status="queued"). Neu job bi
-    Huy sau luc chup do, spawn() phai tu choi thay vi van phong tien trinh."""
+    Huy sau luc chup do, spawn() phai tu choi TRUOC KHI phong tien trinh.
+
+    Ban dau bai test nay chi kiem "co nem InvalidTransition khong" va "job
+    van la cancelled" - va no van xanh khi go vong chan `!= "queued"` ra:
+    thieu vong chan, spawn() chay Popen() roi moi nem, lan nay tu
+    set_status(); duong don dep ngay sau do (giet dua con vua sinh, xoa khoi
+    _PROCESSES) lam ca hai khang dinh cu van dung. Tuc la bai test cu khong
+    he do vong chan do, no do duong don dep.
+
+    Nen kiem dung dieu ma vong chan bao dam va khong ai khac bao dam duoc:
+    KHONG co tien trinh nao duoc phong ra cho mot job da roi khoi "queued".
+    Giet mot tien trinh vua sinh ra khong tuong duong voi khong sinh no: dua
+    con do da chay duoc mot doan, da co the goi API va dot quota that.
+    """
     monkeypatch.setenv("SB_FAKE_PIPELINE", "1")
     job = make_job()
     jobs.cancel(job["id"])
 
-    with pytest.raises(jobs.InvalidTransition):
-        jobs.spawn(job["id"], api_key="AIzaSyFAKE")
+    launched = []
+    real_popen = subprocess.Popen
 
+    def recording_popen(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        launched.append(process)
+        return process
+
+    # jobs lam `import subprocess`, nen jobs.subprocess chinh la module do;
+    # monkeypatch tu tra lai nguyen trang sau bai test.
+    monkeypatch.setattr(jobs.subprocess, "Popen", recording_popen)
+
+    try:
+        with pytest.raises(jobs.InvalidTransition):
+            jobs.spawn(job["id"], api_key="AIzaSyFAKE")
+    finally:
+        # Neu vong chan da bien mat thi o day dang co mot tien trinh that
+        # (spawn() cung tu giet no, nhung dung de bai test phu thuoc vao do).
+        for process in launched:
+            process.kill()
+            process.wait()
+
+    assert launched == [], (
+        "spawn() da goi Popen() cho mot job khong con 'queued' - vong chan "
+        "truoc luc phong tien trinh da bi go mat"
+    )
     assert job["id"] not in jobs._PROCESSES
     assert jobs.read_job(job["id"])["status"] == "cancelled"
 

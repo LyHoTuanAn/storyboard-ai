@@ -27,6 +27,13 @@ const CONFIRM_TIMEOUT_MS = 4000;
 
 export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () => void }) {
   const [job, setJob] = useState<Job | null>(null);
+  // Loi khi tai chi tiet job. Truoc khi co no, reload() khong co nhanh
+  // `catch`: mot GET /api/jobs/{id} that bai (mat mang, server vua restart,
+  // job vua bi xoa) de `job` nguyen la null, va `if (!job) return null` ben
+  // duoi tra ve mot khung trong hoan toan - khong chu nao, khong nut nao,
+  // khong dau hieu la co chuyen gi da xay ra. Phai noi that voi nguoi dung
+  // va cho ho duong thu lai.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -47,7 +54,16 @@ export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () =
   }, [scene?.current, status]);
 
   const reload = useCallback(async () => {
-    setJob(await getJob(jobId));
+    try {
+      const fresh = await getJob(jobId);
+      setJob(fresh);
+      setLoadError(null);
+    } catch (err) {
+      // Giu nguyen `job` da co (neu co): mot lan lam moi hong khong nen xoa
+      // sach nhung gi dang hien. Chi khi chua bao gio tai duoc thi khung
+      // bao loi ben duoi moi thay cho ca man hinh.
+      setLoadError(err instanceof Error ? err.message : "Khong tai duoc du lieu job");
+    }
   }, [jobId]);
 
   useEffect(() => {
@@ -65,6 +81,7 @@ export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () =
   useEffect(() => {
     setConfirmingCancel(false);
     setCancelling(false);
+    setLoadError(null);
     return () => {
       if (confirmTimer.current !== null) window.clearTimeout(confirmTimer.current);
     };
@@ -97,7 +114,42 @@ export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () =
       });
   }, [confirmingCancel, jobId, reload, onChanged]);
 
-  if (!job) return null;
+  if (!job) {
+    if (loadError) {
+      return (
+        <div
+          className="flex flex-col items-start gap-3 px-4 py-3 text-sm"
+          style={{
+            border: "1px solid var(--st-failed)",
+            borderRadius: "var(--radius)",
+            color: "var(--st-failed)",
+          }}
+          role="alert"
+        >
+          <span className="flex items-center gap-2 font-medium">
+            <WarningIcon size={16} />
+            Khong tai duoc chi tiet job
+          </span>
+          <p className="mono text-xs whitespace-pre-wrap">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => {
+              void reload();
+            }}
+            className="px-3 py-2 text-sm transition-transform active:scale-[0.98]"
+            style={{
+              border: "1px solid var(--st-failed)",
+              borderRadius: "var(--radius)",
+              color: "var(--st-failed)",
+            }}
+          >
+            Thu lai
+          </button>
+        </div>
+      );
+    }
+    return null;
+  }
 
   // Mot job "corrupt" chi co { id, status } - moi truong khac (params,
   // error, exit_code, progress...) co the vang mat. running=false cho no
@@ -154,6 +206,15 @@ export function JobDetail({ jobId, onChanged }: { jobId: string; onChanged: () =
       </div>
 
       {running && <ProgressBar scene={scene} step={step} stalled={stalled} />}
+
+      {/* Da tung tai duoc job nay, nhung lan lam moi gan nhat that bai -
+          nhung gi dang hien co the da cu. Noi ro thay vi de nguoi dung tin
+          vao mot man hinh dung yen. */}
+      {loadError && (
+        <p className="text-xs" style={{ color: "var(--st-interrupted)" }} role="status">
+          Khong lam moi duoc chi tiet job ({loadError}). Nhung gi dang hien co the da cu.
+        </p>
+      )}
 
       {corrupt && (
         <div

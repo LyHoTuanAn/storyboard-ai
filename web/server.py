@@ -41,6 +41,26 @@ PUMP_INTERVAL_SECONDS = 3.0
 # va cach duy nhat de don no la xoa thu muc bang tay.
 DELETABLE = jobs.TERMINAL | {"corrupt"}
 
+# Nhung duoi file ma GET /api/jobs/{id}/file duoc phep phuc vu tho tu dia.
+# Route nay ton tai de dua ket qua sinh ra (anh, audio, video) len trinh
+# duyet, khong phai de doc bat cu file nao nam trong thu muc job. Truoc khi
+# co danh sach nay, `path=job.json` roi thang xuong FileResponse va tra ve
+# ban ghi tho - ke ca truong "error" con chua "?key=AIza..." ma
+# GET /api/jobs/{id} da loc ky. Chan theo DANH SACH CHO PHEP thay vi loc
+# rieng job.json: no dong ca mot lop ro ri tuong lai (file .env, file tam,
+# bat cu thu gi pipeline vo tinh ghi vao thu muc job) chu khong chi mot
+# truong.
+#
+# Lay thang tu web/artifacts.py de danh sach nay khong bao gio lech voi thu
+# ma collect() that su co the tra ve: them mot duoi anh moi o do la route
+# nay phuc vu duoc ngay, khong can nho sua hai cho.
+SERVABLE_SUFFIXES = artifacts.IMAGE_SUFFIXES | artifacts.AUDIO_SUFFIXES | artifacts.VIDEO_SUFFIXES
+
+# log.txt khong nam trong danh sach tren (no la .txt) nhung van phai lay
+# duoc: web/README.md chi cach doc nhat ky qua route nay, va no da co duong
+# rieng ben duoi - doc vao bo nho roi loc key, khong bao gio FileResponse.
+LOG_FILE_NAME = "log.txt"
+
 
 async def _pump_loop() -> None:
     """Background task started by lifespan(): periodically drains the job
@@ -104,7 +124,20 @@ def _active_job_ids() -> set[str]:
 
 def _pump_and_sweep() -> None:
     jobs.pump(keys.resolve)
-    keys.sweep(_active_job_ids())
+    # Anh chup danh sach job va lenh quet key phai nam TRONG cung mot vung
+    # tranh chap. Truoc khi sua, hai lenh nay chay ngoai moi khoa: mot
+    # create_job dap dung vao khe giua chung (job da tren dia, key da nho)
+    # khong kip co mat trong anh chup, nen sweep() quen mat key vua nho - va
+    # luot bom ke tiep bao hong chinh job vua tao ("key khong con nua").
+    # Nguoi dung nhan 201 roi thay job hong ngay lap tuc.
+    #
+    # jobs.pump() o tren tu lay va nha khoa nay ben trong, nen no phai nam
+    # NGOAI khoi `with` - threading.Lock khong vao lai duoc. Voi khoa giu o
+    # day, moi create_job hoac la xong han truoc anh chup (job co trong anh
+    # chup, key duoc giu), hoac la chua bat dau khi sweep chay xong (khong co
+    # key nao de quen). Khong con khe o giua.
+    with jobs.pump_lock():
+        keys.sweep(_active_job_ids())
 
 
 def ffmpeg_available() -> bool:
@@ -193,6 +226,21 @@ def job_artifacts(job_id: str):
     return artifacts.collect(job_id)
 
 
+def _refuse_file() -> JSONResponse:
+    """Loi tu choi DUY NHAT cua route tai file.
+
+    Ca hai vong chan (duong dan ra ngoai thu muc job, va file khong phai ket
+    qua) tra ve dung mot cau tra loi: nguoi goi khong doan duoc file nao co
+    that trong thu muc job qua viec so hai thong bao khac nhau, va giao dien
+    chi phai xu ly mot truong hop.
+    """
+    return error(
+        403,
+        "forbidden",
+        "Route nay chi phuc vu file ket qua cua job (anh, audio, video) va log.txt",
+    )
+
+
 @app.get("/api/jobs/{job_id}/file")
 def job_file(job_id: str, path: str):
     try:
@@ -201,17 +249,24 @@ def job_file(job_id: str, path: str):
     except jobs.JobNotFound:
         return error(404, "not_found", f"Khong co job {job_id}")
     except artifacts.Forbidden:
-        return error(403, "forbidden", "Duong dan nam ngoai thu muc job")
+        return _refuse_file()
 
     # log.txt la mot duong ra rieng cua noi dung log, khong di qua SSE - nen
     # no phai duoc loc key o day nua. Doc va loc trong bo nho thay vi
     # FileResponse (gui thang file tho tu dia).
-    if target == jobs.job_dir(job_id).resolve() / "log.txt":
+    if target == jobs.job_dir(job_id).resolve() / LOG_FILE_NAME:
         try:
             content = target.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return error(404, "not_found", "Khong doc duoc file nhat ky")
         return Response(content=redact(content), media_type="text/plain; charset=utf-8")
+
+    # Nam trong thu muc job van chua du. FileResponse gui file tho tu dia,
+    # khong qua bat cu bo loc nao - nen chi nhung file ma route nay ton tai
+    # de phuc vu moi duoc di qua. job.json la vi du cu the: no nam dung trong
+    # thu muc job, va truong "error" cua no co the con "?key=AIza...".
+    if target.suffix.lower() not in SERVABLE_SUFFIXES:
+        return _refuse_file()
 
     return FileResponse(target)
 

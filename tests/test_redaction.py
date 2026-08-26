@@ -1,10 +1,14 @@
 """Key phai bi loc o MOI duong ra, khong chi o luong SSE.
 
 Mot key Gemini co the lot vao log qua thong bao loi cua thu vien (google.genai
-dua ca URL yeu cau, kem "?key=AIza...", vao message). Tu do no co bon duong ra
+dua ca URL yeu cau, kem "?key=AIza...", vao message). Tu do no co nam duong ra
 khac nhau: file log.txt tren dia, truong "error" trong job.json, REST
-(GET /api/jobs/{id}), va route tai file (GET /api/jobs/{id}/file). Moi bai
-test duoi day gam mot duong.
+(GET /api/jobs/{id}), luong SSE, va route tai file (GET /api/jobs/{id}/file).
+Moi bai test duoi day gam mot duong.
+
+Rieng route tai file co hai nua: log.txt di qua duong doc-va-loc trong bo
+nho, con moi thu khac chi duoc phuc vu neu no la file ket qua (anh, audio,
+video). job.json khong phai ket qua, nen no khong ra duoc bang duong nao.
 """
 
 import time
@@ -149,3 +153,90 @@ def test_a_key_in_a_pipeline_error_reaches_no_exit_at_all():
     served = client.get(f"/api/jobs/{job['id']}/file", params={"path": "log.txt"})
     assert served.status_code == 200
     assert FAKE_KEY not in served.text
+
+
+def test_file_route_refuses_job_json():
+    """Duong ra thu nam. Route tai file phuc vu file tho tu dia bang
+    FileResponse, khong qua bat cu bo loc nao - va job.json nam dung trong
+    thu muc job, nen truoc khi sua no di qua tron ven. Route nay chi ton tai
+    de dua ket qua sinh ra len trinh duyet; job.json khong phai ket qua nao
+    ca, nen no phai bi tu choi bang dung mot loi 403 ma vong chan duong dan
+    dang dung."""
+    job = make_job()
+
+    resp = client.get(f"/api/jobs/{job['id']}/file", params={"path": "job.json"})
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "forbidden"
+
+
+def test_file_route_refuses_every_non_artifact_file():
+    """Khong chi job.json: bat cu thu gi khong phai anh/audio/video (va
+    khong phai log.txt) deu phai bi tu choi. Danh sach cho phep dong ca mot
+    lop ro ri tuong lai, khong chi mot truong cua mot file."""
+    job = make_job()
+    directory = jobs.job_dir(job["id"])
+    (directory / "secret.env").write_text(f"GEMINI_API_KEY={FAKE_KEY}\n", encoding="utf-8")
+    (directory / "notes.txt").write_text("khong phai ket qua\n", encoding="utf-8")
+
+    for path in ["secret.env", "notes.txt", "job.json"]:
+        resp = client.get(f"/api/jobs/{job['id']}/file", params={"path": path})
+        assert resp.status_code == 403, path
+        assert FAKE_KEY not in resp.text, path
+
+
+def test_file_route_still_serves_the_log_and_the_artifacts():
+    """Vong chan moi khong duoc chan mat hai thu route nay ton tai de phuc
+    vu: log.txt (web/README.md chi cach doc no qua day, va no di qua duong
+    da loc key) va cac file ket qua that su."""
+    job = make_job()
+    directory = jobs.job_dir(job["id"])
+    (directory / "log.txt").write_text("mot dong log\n", encoding="utf-8")
+    scene_dir = directory / "output" / "run_1" / "scene_1"
+    scene_dir.mkdir(parents=True)
+    (scene_dir / "frame.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (scene_dir / "voice.wav").write_bytes(b"RIFF")
+    (directory / "output" / "run_1" / "storyboard_final_video.mp4").write_bytes(b"\x00")
+
+    served = client.get(f"/api/jobs/{job['id']}/file", params={"path": "log.txt"})
+    assert served.status_code == 200
+    assert "mot dong log" in served.text
+
+    for path in [
+        "output/run_1/scene_1/frame.png",
+        "output/run_1/scene_1/voice.wav",
+        "output/run_1/storyboard_final_video.mp4",
+    ]:
+        resp = client.get(f"/api/jobs/{job['id']}/file", params={"path": path})
+        assert resp.status_code == 200, path
+
+
+def test_a_key_planted_in_job_json_reaches_no_route_at_all():
+    """Bai test ma reviewer dung de tai hien lo hong: mot job.json co key
+    that trong truong "error". GET /api/jobs/{id} loc no, nhung
+    GET /api/jobs/{id}/file?path=job.json truoc day tra ve file tho. Soi lai
+    TAT CA cac duong ra HTTP, khong chi hai duong do."""
+    job = make_job()
+    directory = jobs.job_dir(job["id"])
+    on_disk = jobs.read_job(job["id"])
+    on_disk["status"] = "failed"
+    on_disk["error"] = f"400 INVALID_ARGUMENT https://api/v1?key={FAKE_KEY}"
+    (directory / "job.json").write_text(
+        __import__("json").dumps(on_disk), encoding="utf-8"
+    )
+    # Key that su NAM tren dia - neu khong, bai test nay khong chung minh gi.
+    assert FAKE_KEY in (directory / "job.json").read_text(encoding="utf-8")
+
+    job_id = job["id"]
+    assert FAKE_KEY not in client.get(f"/api/jobs/{job_id}").text
+    assert FAKE_KEY not in client.get("/api/jobs").text
+    assert FAKE_KEY not in client.get(f"/api/jobs/{job_id}/artifacts").text
+    assert FAKE_KEY not in client.get(f"/api/jobs/{job_id}/file", params={"path": "job.json"}).text
+    assert FAKE_KEY not in client.get(f"/api/jobs/{job_id}/file", params={"path": "./job.json"}).text
+    assert (
+        FAKE_KEY
+        not in client.get(f"/api/jobs/{job_id}/file", params={"path": "output/../job.json"}).text
+    )
+    assert FAKE_KEY not in client.get(f"/api/jobs/{job_id}/file", params={"path": "log.txt"}).text
+    with client.stream("GET", f"/api/jobs/{job_id}/events") as resp:
+        assert FAKE_KEY not in "".join(resp.iter_text())
